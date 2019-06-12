@@ -1,0 +1,7 @@
+test 6 1000 185115
+test.dat 16 22.267251461988305(5310)/uV 16 0 5510 12085 0 L:Quadriceps_femoris_muscle_-_vastus_medialis
+test.dat 16 18.382075471698112(-5488)/uV 16 0 -5377 16766 0 L:Tibialis_anterior_muscle
+test.dat 16 42.66412213740458(767)/uV 16 0 980 10228 0 L:Soleus_muscle
+test.dat 16 25.7196261682243(257)/uV 16 0 385 41493 0 R:Quadriceps_femoris_muscle_-_vastus_medialis
+test.dat 16 22.221674876847292(-5701)/uV 16 0 -5545 54509 0 R:Tibialis_anterior_muscle
+test.dat 16 23.00234375(-3324)/uV 16 0 -3162 43777 0 R:Soleus_muscle
