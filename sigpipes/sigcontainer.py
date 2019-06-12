@@ -5,6 +5,7 @@ from re import split
 
 import numpy as np
 from sigpipes.auxtools import type_info, smart_tostring
+import h5py
 
 
 class TimeUnit(Enum):
@@ -114,23 +115,49 @@ class HierarchicalDict:
 class SigContainer:
     """
     Hierarchical container for physiological signal data (including annotations and
-    auxiliary (meta)data.
+    auxiliary (meta)data).
     """
-    def __init__(self, signals: np.ndarray, channels: Sequence[str],
-                 units: Sequence[str], fs: float = 1.0):
+    def __init__(self, data: HierarchicalDict) -> None:
+        """
+        Private constructor. Use factory methods: from_signal_array or from_hdf5.
+        """
+        self.d = data
+
+    @staticmethod
+    def from_container(container: "SigContainer", a: int, b: int):
+        d = HierarchicalDict()
+        d["signals/data"] = container.d["signals/data"]
+        d["signals/channels"] = container.d["signals/channels"]
+        d["signals/units"] = container.d["signals/units"]
+        d["signals/fs"] = container.d["signals/fs"]
+
+        d["log"] = list(container.d["log"])
+        if "annotations" in container.d:
+            anns = SigContainer.cut_annots(container.d["annotations"], a, b)
+            d.make_folder("annotations")
+            d["annotations"].update(anns)
+        d.make_folder("meta")
+        d["meta"].update(container.d["meta"])
+        return SigContainer(d)
+
+    @staticmethod
+    def from_signal_array(signals: np.ndarray, channels: Sequence[str],
+                  units: Sequence[str], fs: float = 1.0) -> "SigContainer":
         """
         :param signals: signals as 2D array, channels in rows
         :param channels: identifiers of channels
         :param units:  units of channels data
         :param fs: (common) sampling frequency
         """
-        self.d = HierarchicalDict()
-        self.d["signals/data"] = signals
-        self.d["signals/channels"] = channels
-        self.d["signals/units"] = units
-        self.d["signals/fs"] = fs
+        d = HierarchicalDict()
+        d["signals/data"] = signals
+        d["signals/channels"] = channels
+        d["signals/units"] = units
+        d["signals/fs"] = fs
 
-        self.d["log"] = []
+        d["log"] = []
+        d.make_folder("meta")
+        return SigContainer(d)
 
     def add_annotation(self, annotator: str,
                        samples: Sequence[int], types: Sequence[str],
@@ -238,4 +265,34 @@ class SigContainer:
     def get_fft_tuple(self, i: int, source: str):
         return self.d[f"{source}/data"][i, :], self.d[f"{source}/channels"][i]
 
+    @staticmethod
+    def from_hdf5(filename: str) -> "SigContainer":
+        data = HierarchicalDict()
+        with h5py.File(filename, "r") as f:
+            f.visititems(lambda name, item : SigContainer._visitor(data, name, item))
+        return SigContainer(data)
 
+    @staticmethod
+    def _visitor(data: HierarchicalDict, name: str, item: Union[h5py.Group, h5py.Dataset]) -> None:
+        if isinstance(item, h5py.Group):
+            data.make_folder(name)
+        elif isinstance(item, h5py.Dataset):
+            type = item.attrs["type"]
+            if type == "int":
+                data[name] = int(item[0])
+            elif type == "float":
+                data[name] = float(item[0])
+            elif type in ["ndarray", "list", "str_ndarray", "str_list"]:
+                data[name] = item.value
+
+    @staticmethod
+    def cut_annots(adict, start_sample, end_sample):
+        tdict = {}
+        for annotator in adict.keys():
+            samples = np.array(adict[annotator]["samples"], copy=True)
+            mn, mx = np.searchsorted(samples, [start_sample, end_sample])
+            tdict[annotator] = {}
+            tdict[annotator]["samples"] = samples[mn:mx] - start_sample
+            tdict[annotator]["types"] = adict[annotator]["types"][mn:mx]
+            tdict[annotator]["notes"] = adict[annotator]["notes"][mn:mx]
+        return tdict

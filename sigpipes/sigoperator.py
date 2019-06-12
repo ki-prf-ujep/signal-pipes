@@ -79,18 +79,6 @@ class PartitionerTool:
             interval = int(1_000_000_000 / fs)
             return int(shift / np.timedelta64(interval, "ns"))
 
-    @staticmethod
-    def cut_annots(adict, start_sample, end_sample):
-        tdict = {}
-        for annotator in adict.keys():
-            samples = np.array(adict[annotator]["samples"], copy=True)
-            mn, mx = np.searchsorted(samples, [start_sample, end_sample])
-            tdict[annotator] = {}
-            tdict[annotator]["samples"] = samples[mn:mx] - start_sample
-            tdict[annotator]["types"] = adict[annotator]["types"][mn:mx]
-            tdict[annotator]["notes"] = adict[annotator]["notes"][mn:mx]
-        return tdict
-
 
 class SubSample(SigOperator):
     def __init__(self, start: Union[int, float, np.timedelta64],
@@ -108,7 +96,7 @@ class SubSample(SigOperator):
 
         if "annotations" in container.d:
             adict = container.d["annotations"]
-            newdict = PartitionerTool.cut_annots(adict, start, end)
+            newdict = SigContainer.cut_annots(adict, start, end)
             adict.update(newdict)
 
         return container
@@ -187,16 +175,8 @@ class MarkerSplitter(SigOperator):
                 for a, b in zip(limits, limits[1:])]
 
     def container_factory(self, container: SigContainer, a: int, b: int):
-        c = SigContainer(container.d["signals/data"][:, a:b], container.d["signals/channels"],
-                         container.d["signals/units"], container.d["signals/fs"])
-        c.d["log"] = list(container.d["log"])
+        c = SigContainer.from_container(container, a, b)
         c.d["log"].append(f"msplit({self.aspec})@{a}:{b}")
-        if "annotations" in container.d:
-            anns = PartitionerTool.cut_annots(container.d["annotations"], a, b)
-            c.d.make_folder("annotations")
-            c.d["annotations"].update(anns)
-        c.d.make_folder("meta")
-        c.d["meta"].update(container.d["meta"])
         return c
 
 
@@ -206,15 +186,7 @@ class SimpleBranching(SigOperator):
 
     @staticmethod
     def container_factory(container: SigContainer):
-        c = SigContainer(container.d["signals/data"], container.d["signals/channels"],
-                         container.d["signals/units"], container.d["signals/fs"])
-        c.d["log"] = list(container.d["log"])
-        if "annotations" in container.d:
-            c.d.make_folder("annotations")
-            c.d["annotations"].update(container.d["annotations"])
-        if "meta" in container.d:
-            c.d.make_folder("meta")
-            c.d["meta"].update(container.d["meta"])
+        c = SigContainer.from_container(container, 0, container.sample_count)
         return c
 
 
@@ -293,20 +265,20 @@ class Fft(SigOperator):
         return container
 
 
-class Hdf5Saver(SigOperator):
+class Hdf5(SigOperator):
     def __init__(self, filename):
         self.filename = filename
 
     @staticmethod
     def h5mapper(value):
         if isinstance(value, np.ndarray):
-            if len(value) > -0 and isinstance(value[0], str):
-                return "strlistr", np.array(value, dtype="S")
+            if len(value) > 0 and isinstance(value[0], str):
+                return "str_ndarray", np.array(value, dtype="S")
             return "ndarray", value
         if isinstance(value, list):
             if len(value) > -0 and isinstance(value[0], str):
-                return "strlistr", np.array(value, dtype="S")
-            return "list",  np.array(value)
+                return "str_list", np.array(value, dtype="S")
+            return "list", np.array(value)
         if isinstance(value, float):
             return "float", np.full((1,), value, dtype=np.float)
         if isinstance(value, int):
@@ -317,10 +289,14 @@ class Hdf5Saver(SigOperator):
         file = self.filename.format(container)
         with h5py.File(file, "w") as f:
             for path, value in container.d:
-                type, hvalue = Hdf5Saver.h5mapper(value)
+                type, hvalue = Hdf5.h5mapper(value)
                 f[path] = hvalue
                 f[path].attrs["type"] = type
         return container
+
+    @staticmethod
+    def load(filename):
+        SigContainer.from_hdf5(filename)
 
 
 class PResample(SigOperator):

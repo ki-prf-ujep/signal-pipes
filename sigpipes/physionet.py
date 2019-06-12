@@ -35,8 +35,9 @@ class PhysionetRecord:
         return self.record.units
 
     def sigcontainer(self, annotators: Iterable[str] = None) -> SigContainer:
-        c = SigContainer(signals=np.transpose(self.record.p_signal), channels=self.record.sig_name,
-                         units=self.record.units, fs=self.record.fs)
+        c = SigContainer.from_signal_array(signals=np.transpose(self.record.p_signal),
+                                           channels=self.record.sig_name,
+                                           units=self.record.units, fs=self.record.fs)
         if annotators is not None:
             with h5py.File("physionet_cache.h5") as store:
                 for annotator in annotators:

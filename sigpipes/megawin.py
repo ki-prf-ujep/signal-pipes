@@ -45,8 +45,8 @@ class MegaWinMatlab:
             wfdb.wrann(record_name, annotator, sample, symbol=symbols, write_dir=dir_path)
 
     def sigcontainer(self) -> SigContainer:
-        container = SigContainer(self.data.transpose(), channels=self.channels, units=self.units,
-                                 fs=self.fs)
+        container = SigContainer.from_signal_array(self.data.transpose(), channels=self.channels,
+                                                   units=self.units, fs=self.fs)
         for annotator in self.annotations.keys():
             samples = self.annotations[annotator]["sample"]
             symbols = [self.annotations[annotator]["symbol"]] * len(samples)
