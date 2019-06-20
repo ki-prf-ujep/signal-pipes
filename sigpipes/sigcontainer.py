@@ -53,6 +53,7 @@ class HierarchicalDict:
     def __getitem__(self, key: str) -> Any:
         """
         Get value with given hierarchical key (path).
+        Empty path is invalid.
         """
         path = split(r"/+", key.strip("/"))
         adict = self.root
@@ -92,6 +93,9 @@ class HierarchicalDict:
     def __str__(self):
         return HierarchicalDict.rec_print(self.root, 0)
 
+    def __repr__(self):
+        return HierarchicalDict.rec_print(self.root, 0)
+
     @staticmethod
     def rec_print(d, level: int):
         return "\n".join(
@@ -126,7 +130,7 @@ class SigContainer:
     @staticmethod
     def from_container(container: "SigContainer", a: int, b: int):
         d = HierarchicalDict()
-        d["signals/data"] = container.d["signals/data"]
+        d["signals/data"] = container.d["signals/data"][:, a:b]
         d["signals/channels"] = container.d["signals/channels"]
         d["signals/units"] = container.d["signals/units"]
         d["signals/fs"] = container.d["signals/fs"]
@@ -182,6 +186,10 @@ class SigContainer:
         getter for container data (signals, annotations, auxiliary data)
         """
         return self.d[key]
+
+    @property
+    def signals(self):
+        return self.d["signals/data"]
 
     def __str__(self):
         return str(self.d)
@@ -242,6 +250,9 @@ class SigContainer:
         :return:
         """
         annotator, achar, astring = SigContainer.annotation_parser(specifier)
+        if annotator not in self.d["annotations"]:
+            raise KeyError(f"""Invalid annotator {annotator}
+                           (only {','.join(self.d['annotations'].keys())} are included)""")
         samples = np.array(self.d[f"annotations/{annotator}/samples"])
         types = np.array(self.d[f"annotations/{annotator}/types"])
         notes = np.array(self.d[f"annotations/{annotator}/notes"])
@@ -282,6 +293,8 @@ class SigContainer:
                 data[name] = int(item[0])
             elif type == "float":
                 data[name] = float(item[0])
+            elif type == "str":
+                data[name] = str(item[0])
             elif type in ["ndarray", "list", "str_ndarray", "str_list"]:
                 data[name] = item.value
 

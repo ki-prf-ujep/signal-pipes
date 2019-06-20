@@ -1,7 +1,7 @@
 from sigpipes.sigcontainer import SigContainer, TimeUnit
 from sigpipes.auxtools import seq_wrap, smart_tostring
 
-from typing import Sequence, Union, Iterable, Optional
+from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any
 import collections.abc
 import sys
 import fractions
@@ -170,7 +170,7 @@ class MarkerSplitter(SigOperator):
         if self.left_segment and limits[0] != 0:
             limits = np.insert(limits, 0, 0)
         if self.right_segment and limits[-1] != container.sample_count - 1:
-            limits = np.append(limits, [container.sample_count - 1])
+            limits = np.append(limits, [container.sample_count])
         return [self.container_factory(container, a, b)
                 for a, b in zip(limits, limits[1:])]
 
@@ -219,7 +219,10 @@ class UfuncOnSignals(SigOperator):
         return container
 
     def log(self):
-        return f"ufunc%{self.ufunc.__name__}"
+        if hasattr(self.ufunc, "__name__"):
+            return f"ufunc%{self.ufunc.__name__}"
+        else:
+            return "ufunc"
 
 
 class Convolution(SigOperator):
@@ -283,6 +286,10 @@ class Hdf5(SigOperator):
             return "float", np.full((1,), value, dtype=np.float)
         if isinstance(value, int):
             return "int", np.full((1,), value, dtype=np.int)
+        if isinstance(value, str):
+            return "str", np.full((1,), value, dtype="S")
+        else:
+            raise TypeError(f"unsupported type {value.__class__} of value `{value}`")
 
     def apply(self, container: SigContainer) -> SigContainer:
         import h5py
@@ -341,3 +348,16 @@ class PResample(SigOperator):
     def log(self):
         return (f"resample({self.up}/{self.down})" if self.up is not None
                 else f"resample({self.new_freq})")
+
+
+class Reaper(SigOperator):
+    def __init__(self, store: MutableMapping[str, Any], store_key: str,
+                 data_key: Optional[str] = None):
+        self.store = store
+        self.skey = store_key
+        self.dkey = data_key
+
+    def apply(self, container: SigContainer):
+        skey = self.skey.format(container)
+        self.store[skey] = container[self.dkey] if self.dkey is not None else container
+        return container
