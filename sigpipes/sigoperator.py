@@ -1,5 +1,6 @@
-from sigpipes.sigcontainer import SigContainer, TimeUnit
+from sigpipes.sigcontainer import SigContainer
 from sigpipes.auxtools import seq_wrap, smart_tostring
+from sigpipes.auxtools import PartitionerTool, TimeUnit
 
 from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any
 import collections.abc
@@ -15,21 +16,69 @@ class SigOperator:
     """
     Base abstract class of signal operators.
     """
-    def apply(self, container: SigContainer) :
-        raise NotImplemented("Abstract method")
+    def apply(self, container: SigContainer) -> Any:
+        raise NotImplementedError("Abstract method")
 
-    def __ror__(self, container: Union[SigContainer, Iterable[SigContainer], "SigOperator"]
-                ) -> Union[SigContainer, Iterable[SigContainer], "SigOperator"]:
+    def prepare(self, container: SigContainer) -> None:
+        """
+        Prepare container at the beginning of apply method.
+        (this method must be called at the first line of `apply` method)
+        Args:
+            container: prepared signal container
+        """
+        pass
+
+    def __ror__(self, container: Union[SigContainer, Sequence[SigContainer], "SigOperator"]
+                ) -> Any:
+        """
+        Pipe operator for streamlining of signal oprators
+        Args:
+            container:  left operand i.e signal container (input), sequence of containers
+            (multiple inputs) or another signal operator (formation of compound operators).
+        Returns:
+            for container as input: container, sequence of containers,
+                                    or another data structures (only consumers)
+            for sequence of containers as input: sequence of containers,
+                                                 sequence of another data structures (only consumers)
+            for signal operators in both operands:  compound signal operator
+        """
         if isinstance(container, SigContainer):
             container.d["log"].append(self.log())
             return self.apply(container)
-        elif isinstance(container, collections.abc.Iterable):
+        elif isinstance(container, collections.abc.Sequence):
             return [c | self for c in container]
         elif isinstance(container, SigOperator):
             return CompoundSigOperator(container, self)
+        else:
+            raise TypeError("Unsupported left operand of pipe")
+
+    def log(self):
+        """
+        Identification of operation for logging purposes.
+        Returns:
+        Simple (and if possible short) identification.
+        """
+        return self.__class__.__name__
+
+
+class IdentityOperator(SigOperator):
+    """
+    Base class for operators which do not modify container.
+    """
+    def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
+        return container
 
     def log(self):
         return "#" + self.__class__.__name__
+
+
+class MaybeConsumerOperator(SigOperator):
+    """
+    Abstract class for operators which can works as final consumers i.e. it can produce different
+    representation of signal data e.g. dataframes, matplot figures, etc.
+    """
+    pass
 
 
 class CompoundSigOperator(SigOperator):
@@ -38,11 +87,23 @@ class CompoundSigOperator(SigOperator):
         self.right = right_operator
 
     def apply(self, container: SigContainer):
+        self.prepare(container)
         return container | self.left | self.right
 
+    def log(self):
+        return "&"
 
-class Print(SigOperator):
+
+class Print(IdentityOperator):
+    """
+    Operator which prints debug text representation into text output
+    """
     def __init__(self, output=sys.stdout, header=True):
+        """
+        Args:
+            output: file-like object in text mode
+            header: the header with log-id is printed
+        """
         if isinstance(output, str):
             self.output = open(output, "wt")
         else:
@@ -50,6 +111,7 @@ class Print(SigOperator):
         self.header = header
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         if self.header:
             print(container.id, file=self.output)
             print("-"*40, file=self.output)
@@ -57,36 +119,31 @@ class Print(SigOperator):
         return container
 
 
-class PartitionerTool:
-    @staticmethod
-    def time_unit_mapper(value):
-        if isinstance(value, int):
-            return TimeUnit.SAMPLE
-        elif isinstance(value, float):
-            return TimeUnit.SECOND
-        elif isinstance(value, np.timedelta64):
-            return TimeUnit.TIME_DELTA
-        else:
-            raise TypeError("The time unit can not be infered or it is ambiguous")
-
-    @staticmethod
-    def to_sample(shift, fs, time_unit):
-        if time_unit == TimeUnit.SAMPLE:
-            return shift
-        elif time_unit == TimeUnit.SECOND:
-            return int(shift * fs)
-        elif time_unit == TimeUnit.TIME_DELTA:
-            interval = int(1_000_000_000 / fs)
-            return int(shift / np.timedelta64(interval, "ns"))
+class SigModifierOperator(SigOperator):
+    """
+    Abstract class for operators which modify signal data
+    """
+    def prepare(self, container: SigContainer) -> None:
+        container.d.make_folder("meta", overwrite=True)
 
 
-class SubSample(SigOperator):
+class Sample(SigModifierOperator):
+    """
+    Sample (continuous interval) of signal (for all channels)
+    """
     def __init__(self, start: Union[int, float, np.timedelta64],
                  end: Union[int, float, np.timedelta64]):
+        """
+        Args:
+            start: start point of sample. integer: sample number, float: time in seconds,
+                   np.timedelta64: time represented by standard time representation of numpy)
+             end: end point of sample (see `start` for interpretation)
+        """
         self.start = start
         self.end = end
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         fs = container.d["signals/fs"]
         start = PartitionerTool.to_sample(self.start, fs,
                                           PartitionerTool.time_unit_mapper(self.start))
@@ -106,25 +163,46 @@ class SubSample(SigOperator):
 
 
 class ChannelSelect(SigOperator):
+    """
+    Selection of limited subset of channels.
+    """
     def __init__(self, selector: Sequence[int]) -> None:
+        """
+        Args:
+            selector: sequence of (integer) indexes of channels
+        """
         self.selector = selector
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         container.d["signals/data"] = container.d["signals/data"][self.selector, :]
         container.d["signals/channels"] = np.array(container.d["signals/channels"])[self.selector]
         container.d["signals/units"] = np.array(container.d["signals/units"])[self.selector]
+        # TODO: constraints meta data including fft to selected channels
         return container
 
     def log(self):
         return f"chsel({self.selector})"
 
 
-class FeatureExtraction(SigOperator):
-    def __init__(self, target: str = "features", wamp_threshold: Union[float, Sequence[float]] = ()):
+class MetaProducerOperator(SigOperator):
+    """
+    Abstract class for operators which product metadata (i.e. data inferred from signals)
+    """
+    pass
+
+
+class FeatureExtraction(MetaProducerOperator):
+    """
+    Extraction of basic features of signal.
+    """
+    def __init__(self, target: str = "features",
+                 wamp_threshold: Union[float, Sequence[float]] = ()):
         self.wamp_threshold = seq_wrap(wamp_threshold)
         self.target = target
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         n = container.sample_count
         data = container.d["signals/data"]
         absum = np.sum(np.abs(data), axis=1)
@@ -134,9 +212,10 @@ class FeatureExtraction(SigOperator):
         data1 = data[:, :n//4]
         data2 = data[:, n//4:3*n//4+1]
         data3 = data[:, 3*n//4+1:]
-        container.d[f"meta/{self.target}/MMAV1"] = (0.5 * np.sum(np.abs(data1), axis=1)
-                                         + np.sum(np.abs(data2), axis=1)
-                                         + 0.5 * np.sum(np.abs(data3), axis=1)) / n
+        container.d[f"meta/{self.target}/MMAV1"] = (
+            (0.5 * np.sum(np.abs(data1), axis=1)
+             + np.sum(np.abs(data2), axis=1)
+             + 0.5 * np.sum(np.abs(data3), axis=1)) / n)
 
         qsum = np.sum(data * data, axis=1)
         container.d[f"meta/{self.target}/SSI"] = qsum
@@ -157,64 +236,124 @@ class FeatureExtraction(SigOperator):
         return f"fex({self.target})"
 
 
-class MarkerSplitter(SigOperator):
+class SplitterOperator(SigOperator):
+    """
+    Abstract class for splitters (i.e. operators which split container into several containers
+    (segments) that can be processes independently as sequence of container
+    """
+
+    def container_factory(self, container: SigContainer, a: int, b: int,
+                          splitter_id: str) -> SigContainer:
+        c = SigContainer.from_container(container, a, b)
+        c.d["log"].append(f"{splitter_id}@{a}:{b}")
+        return c
+
+
+class SampleSplitter(SplitterOperator):
+    """
+    Splitting of signals data to several containers in points defined by samples
+    or its absolute time. Only inner intervals are included!
+    The returned data can be processes independently as sequence of container.
+    """
+    def __init__(self, points: Sequence[Union[int, float, np.timedelta64]]) -> None:
+        self.points = points
+
+    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        fs = container.d["signals/fs"]
+        limits = [PartitionerTool.to_sample(point, fs, PartitionerTool.time_unit_mapper(point))
+                  for point in self.points]
+        limits.sort()
+        return [self.container_factory(container, a, b, f"split")
+                for a, b in zip(limits, limits[1:])]
+
+
+class MarkerSplitter(SplitterOperator):
+    """
+    Splitting of signals data to several containers in points defined by annotation (marker).
+    The returned data can be processes independently as sequence of container.
+    """
     def __init__(self, annotation_spec: str, left_outer_segments: bool = False,
-                 right_outer_segment: bool = False):
+                 right_outer_segment: bool = False) -> None:
+        """
+        Args:
+            annotation_spec: specification of splitting annotations (annotator)
+            left_outer_segments: true = signal before the first splitting annotation is included
+            right_outer_segment: true = signal after the last splitting annotation is included
+        """
         self.aspec = annotation_spec
         self.left_segment = left_outer_segments
         self.right_segment = right_outer_segment
 
-    def apply(self, container: SigContainer) -> Iterable[SigContainer]:
+    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        self.prepare(container)
         limits = container.get_annotation_positions(self.aspec, TimeUnit.SAMPLE,
                                                     container.d["signals/fs"])
         if self.left_segment and limits[0] != 0:
             limits = np.insert(limits, 0, 0)
         if self.right_segment and limits[-1] != container.sample_count - 1:
             limits = np.append(limits, [container.sample_count])
-        return [self.container_factory(container, a, b)
+        return [self.container_factory(container, a, b, f"msplit[{self.aspec}]")
                 for a, b in zip(limits, limits[1:])]
-
-    def container_factory(self, container: SigContainer, a: int, b: int):
-        c = SigContainer.from_container(container, a, b)
-        c.d["log"].append(f"msplit({self.aspec})@{a}:{b}")
-        return c
 
 
 class SimpleBranching(SigOperator):
+    """
+    Abstract class for branching operators i.e  operators bifurcating stream to two branches
+    which are initially identical (on the same container).
+    """
     def __init__(self, branch: SigOperator):
         self.branch = branch
 
     @staticmethod
     def container_factory(container: SigContainer):
-        c = SigContainer.from_container(container, 0, container.sample_count)
+        c = SigContainer.from_container(container, 0, container.sample_count, copy_meta=True)
         return c
 
 
 class Tee(SimpleBranching):
+    """
+    Tee branching operator. The secondary bifurcated stream is processed by operator
+    (typically compound operator) in parameter `branch` and closed. Primary stream is returned
+    value.
+    """
     def __init__(self, branch: SigOperator):
         super().__init__(branch)
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         copy = SimpleBranching.container_factory(container)
         copy | self.branch
         return container
 
 
 class AltOptional(SimpleBranching):
+    """
+    Alternative branching operator.  The secondary bifurcated stream is processed by operator
+    (typically compound operator) in parameter `branch`. Both streams are returned as sequence
+    of operators.
+    """
     def __init__(self, alternative: SigOperator):
         super().__init__(alternative)
 
-    def  apply(self, container: SigContainer) -> Iterable[SigContainer]:
+    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        self.prepare(container)
         copy = SimpleBranching.container_factory(container)
         acontainer = copy | self.branch
         return container, acontainer
 
 
-class UfuncOnSignals(SigOperator):
+class UfuncOnSignals(SigModifierOperator):
+    """
+    Application of unary numpy ufunc on signals.
+
+    Examples:
+        container | UfuncOnSignals(np.abs)
+    """
     def __init__(self, ufunc):
         self.ufunc = ufunc
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         container.d["signals/data"] = self.ufunc(container.d["signals/data"])
         return container
 
@@ -225,12 +364,13 @@ class UfuncOnSignals(SigOperator):
             return "ufunc"
 
 
-class Convolution(SigOperator):
+class Convolution(SigModifierOperator):
     def __init__(self, v: np.ndarray):
-        self.v = v
+        self.v = np.array(v, dtype=np.float)
         self.sum = np.sum(self.v)
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         result = np.empty_like(container.d["signals/data"])
         for i in range(container.channel_count):
             result[i] = np.convolve(container.d["signals/data"][i, :], self.v,
@@ -242,12 +382,13 @@ class Convolution(SigOperator):
         return f"conv({smart_tostring(self.v).strip()})"
 
 
-class CrossCorrelation(SigOperator):
+class CrossCorrelation(SigModifierOperator):
     def __init__(self, v: np.ndarray):
         self.v = v
         self.sum = np.sum(self.v)
 
-    def apply(self, container: SigContainer) -> Union[SigContainer, Iterable[SigContainer]]:
+    def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         container.d["signals/data"] = sig.correlate(container.d["signals/data"],
                                                     self.v) / self.sum
         return container
@@ -256,19 +397,20 @@ class CrossCorrelation(SigOperator):
         return f"corr({smart_tostring(self.v).strip()})"
 
 
-class Fft(SigOperator):
+class Fft(MetaProducerOperator):
     def __init__(self, n: Optional[int] = None, target: str = "fft"):
         self.n = n
         self.target = "meta/" + target
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         container.d[self.target + "/data"] = fft.rfft(container.d["signals/data"], self.n, axis=1)
         container.d[self.target + "/channels"] = container.d["signals/channels"]
         container.d[self.target + "/fs"] = container.d["signals/fs"]
         return container
 
 
-class Hdf5(SigOperator):
+class Hdf5(IdentityOperator):
     def __init__(self, filename):
         self.filename = filename
 
@@ -293,6 +435,7 @@ class Hdf5(SigOperator):
 
     def apply(self, container: SigContainer) -> SigContainer:
         import h5py
+        self.prepare(container)
         file = self.filename.format(container)
         with h5py.File(file, "w") as f:
             for path, value in container.d:
@@ -306,7 +449,7 @@ class Hdf5(SigOperator):
         SigContainer.from_hdf5(filename)
 
 
-class PResample(SigOperator):
+class PResample(SigModifierOperator):
     """
     Resampling using polyphase filtering
     (https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.resample_poly.html)
@@ -332,6 +475,7 @@ class PResample(SigOperator):
             raise AttributeError("Invalid parameters")
 
     def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         if self.new_freq is not None:
             f = fractions.Fraction(self.new_freq / container.d["signals/fs"]).limit_denominator(100)
             self.up = f.numerator
@@ -350,14 +494,15 @@ class PResample(SigOperator):
                 else f"resample({self.new_freq})")
 
 
-class Reaper(SigOperator):
+class Reaper(IdentityOperator):
     def __init__(self, store: MutableMapping[str, Any], store_key: str,
                  data_key: Optional[str] = None):
         self.store = store
         self.skey = store_key
         self.dkey = data_key
 
-    def apply(self, container: SigContainer):
+    def apply(self, container: SigContainer) -> SigContainer:
+        self.prepare(container)
         skey = self.skey.format(container)
         self.store[skey] = container[self.dkey] if self.dkey is not None else container
         return container

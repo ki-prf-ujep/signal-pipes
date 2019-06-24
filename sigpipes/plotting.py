@@ -1,5 +1,6 @@
-from sigpipes.sigcontainer import SigContainer, TimeUnit
-from sigpipes.sigoperator import SigOperator
+from sigpipes.auxtools import TimeUnit
+from sigpipes.sigcontainer import SigContainer
+from sigpipes.sigoperator import MaybeConsumerOperator
 from sigpipes.auxtools import CyclicList
 from sigpipes.auxtools import common_value
 
@@ -102,7 +103,7 @@ class GraphOrganizer:
         return item // self.rows
 
 
-class BasePlot(SigOperator):
+class BasePlot(MaybeConsumerOperator):
     def __init__(self,
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  *,

@@ -1,11 +1,11 @@
-from sigpipes.sigoperator import SigOperator
+from sigpipes.sigoperator import MaybeConsumerOperator
 from sigpipes.sigcontainer import SigContainer, TimeUnit
-from typing import Union, Iterable
+from typing import Union
 
 import pandas as pd
 
 
-class DataFrame(SigOperator):
+class DataFrame(MaybeConsumerOperator):
     def __init__(self, file: str = None, time_unit: TimeUnit = TimeUnit.SECOND):
         self.to_file = file
         self.time_unit = time_unit

@@ -3,6 +3,7 @@ import numpy as np
 from sigpipes.physionet import PhysionetRecord
 from sigpipes.megawin import MegaWinMatlab
 
+from random import sample
 from sigpipes.sigoperator import *
 import pytest
 
@@ -76,6 +77,21 @@ def test_annot_partitioner(markeddata):
             assert all(0 <= p < par.sample_count for p  in annot["samples"])
 
 
+def test_partitioner(megawindata):
+    size = megawindata.sample_count
+    frag_count = 5
+    points = sample(range(size), frag_count)
+    if 0 not in points:
+        points.append(0)
+        frag_count += 1
+    if size not in points:
+        points.append(size)
+        frag_count += 1
+    fragments = megawindata | SampleSplitter(points)
+    assert len(fragments) == frag_count - 1
+    assert megawindata.sample_count == sum(frag.sample_count for frag in fragments)
+
+
 def test_features(simpledata):
     r1, r2 = (simpledata | AltOptional(UfuncOnSignals(np.vectorize(lambda x: x + 1)))
                          | FeatureExtraction(wamp_threshold=0.5))
@@ -104,3 +120,10 @@ def test_features(simpledata):
     assert r2["/meta/features/MMAV1"][0] == 7/9
     assert r2["/meta/features/MMAV1"][1] == 14/9
 
+
+def test_convolution(simpledata):
+    c = simpledata | Convolution([1, 1, 1])
+    assert c.sample_count == simpledata.sample_count
+    sig = simpledata.signals
+    nsig = c.signals
+    assert np.all((sig[:, 5]+sig[:, 6]+sig[:, 7])/3.0 == nsig[:, 6])

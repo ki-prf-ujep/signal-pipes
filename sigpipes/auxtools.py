@@ -1,6 +1,16 @@
+from enum import Enum
 import numpy as np
 import collections.abc
 from typing import Sequence, Any, Iterable
+
+
+class TimeUnit(Enum):
+    SAMPLE = 0
+    SECOND = 1
+    TIME_DELTA = 2
+
+    def fix(self):
+        return TimeUnit.SECOND if self == TimeUnit.TIME_DELTA else self
 
 
 def common_value(iterable: Iterable[Any]) -> Any:
@@ -91,3 +101,26 @@ class CyclicList(collections.abc.Sequence):
 
     def __len__(self) -> int:
         raise NotImplementedError("Cyclic list has infinite length")
+
+
+class PartitionerTool:
+    @staticmethod
+    def time_unit_mapper(value):
+        if isinstance(value, int):
+            return TimeUnit.SAMPLE
+        elif isinstance(value, float):
+            return TimeUnit.SECOND
+        elif isinstance(value, np.timedelta64):
+            return TimeUnit.TIME_DELTA
+        else:
+            raise TypeError("The time unit can not be infered or it is ambiguous")
+
+    @staticmethod
+    def to_sample(shift, fs, time_unit):
+        if time_unit == TimeUnit.SAMPLE:
+            return shift
+        elif time_unit == TimeUnit.SECOND:
+            return int(shift * fs)
+        elif time_unit == TimeUnit.TIME_DELTA:
+            interval = int(1_000_000_000 / fs)
+            return int(shift / np.timedelta64(interval, "ns"))

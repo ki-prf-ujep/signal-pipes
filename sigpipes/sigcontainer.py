@@ -1,20 +1,10 @@
 import re
-from enum import Enum
 from typing import Sequence, Any, Union
 from re import split
 
 import numpy as np
-from sigpipes.auxtools import type_info, smart_tostring
+from sigpipes.auxtools import type_info, smart_tostring, TimeUnit
 import h5py
-
-
-class TimeUnit(Enum):
-    SAMPLE = 0
-    SECOND = 1
-    TIME_DELTA = 2
-
-    def fix(self):
-        return TimeUnit.SECOND if self == TimeUnit.TIME_DELTA else self
 
 
 class HierarchicalDict:
@@ -79,14 +69,14 @@ class HierarchicalDict:
             adict = adict[folder]
         return True
 
-    def make_folder(self, key: str) -> None:
+    def make_folder(self, key: str, *, overwrite=False) -> None:
         """
         Creation of empty folder with given path (all levels of path are
         created)
         """
         path, adict = self._create_path(key)
         folder_name = path[-1]
-        if folder_name in adict:
+        if not overwrite and folder_name in adict:
             raise KeyError(f"key {folder_name} exists")
         adict[folder_name] = {}
 
@@ -128,7 +118,7 @@ class SigContainer:
         self.d = data
 
     @staticmethod
-    def from_container(container: "SigContainer", a: int, b: int):
+    def from_container(container: "SigContainer", a: int, b: int, *, copy_meta=False):
         d = HierarchicalDict()
         d["signals/data"] = container.d["signals/data"][:, a:b]
         d["signals/channels"] = container.d["signals/channels"]
@@ -141,7 +131,8 @@ class SigContainer:
             d.make_folder("annotations")
             d["annotations"].update(anns)
         d.make_folder("meta")
-        d["meta"].update(container.d["meta"])
+        if copy_meta:
+            d["meta"].update(container.d["meta"])
         return SigContainer(d)
 
     @staticmethod
