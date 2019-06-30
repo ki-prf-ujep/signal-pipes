@@ -127,3 +127,22 @@ def test_convolution(simpledata):
     sig = simpledata.signals
     nsig = c.signals
     assert np.all((sig[:, 5]+sig[:, 6]+sig[:, 7])/3.0 == nsig[:, 6])
+
+
+def test_resampling(megawindata):
+    rs = megawindata | PResample(up=5, down=4)
+    assert id(rs.d) != id(megawindata.d)
+    assert megawindata["signals/fs"] == 4 * rs["signals/fs"] / 5
+
+
+def test_channel_selection(megawindata):
+    p1 = megawindata | FeatureExtraction(wamp_threshold=[0.1, 0.2]) | ChannelSelect([0, 1])
+    p2 = megawindata | ChannelSelect([0, 1]) | FeatureExtraction(wamp_threshold=[0.1, 0.2])
+    assert np.all(p1["meta/features/RMS"] == p2["meta/features/RMS"])
+
+
+def test_subsample(megawindata):
+    r = {}
+    p = megawindata | ChannelSelect([1]) | Sample(0.0, 10.0) | Tee(Sample(10, 20) | Reaper(r, "tee"))
+    assert p.sample_count == 10_000
+    assert r["tee"].sample_count == 10

@@ -1,6 +1,6 @@
-from sigpipes.sigcontainer import SigContainer
+from sigpipes.sigcontainer import SigContainer, HierarchicalDict
 from sigpipes.auxtools import seq_wrap, smart_tostring
-from sigpipes.auxtools import PartitionerTool, TimeUnit
+from sigpipes.auxtools import TimeUnit
 
 from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any
 import collections.abc
@@ -19,28 +19,31 @@ class SigOperator:
     def apply(self, container: SigContainer) -> Any:
         raise NotImplementedError("Abstract method")
 
-    def prepare(self, container: SigContainer) -> None:
+    def prepare_container(self, container: SigContainer) -> SigContainer:
         """
         Prepare container at the beginning of apply method.
         (this method must be called at the first line of `apply` method)
+
         Args:
             container: prepared signal container
         """
-        pass
+        return container
 
     def __ror__(self, container: Union[SigContainer, Sequence[SigContainer], "SigOperator"]
                 ) -> Any:
         """
         Pipe operator for streamlining of signal oprators
+
         Args:
             container:  left operand i.e signal container (input), sequence of containers
             (multiple inputs) or another signal operator (formation of compound operators).
+
         Returns:
-            for container as input: container, sequence of containers,
-                                    or another data structures (only consumers)
-            for sequence of containers as input: sequence of containers,
-                                                 sequence of another data structures (only consumers)
-            for signal operators in both operands:  compound signal operator
+            - for container as input: container, sequence of containers,
+              or another data structures (only consumers)
+            - for sequence of containers as input: sequence of containers,
+              sequence of another data structures (only consumers)
+            - for signal operators in both operands:  compound signal operator
         """
         if isinstance(container, SigContainer):
             container.d["log"].append(self.log())
@@ -55,6 +58,7 @@ class SigOperator:
     def log(self):
         """
         Identification of operation for logging purposes.
+
         Returns:
         Simple (and if possible short) identification.
         """
@@ -66,14 +70,14 @@ class IdentityOperator(SigOperator):
     Base class for operators which do not modify container.
     """
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         return container
 
     def log(self):
         return "#" + self.__class__.__name__
 
 
-class MaybeConsumerOperator(SigOperator):
+class MaybeConsumerOperator(IdentityOperator):
     """
     Abstract class for operators which can works as final consumers i.e. it can produce different
     representation of signal data e.g. dataframes, matplot figures, etc.
@@ -87,11 +91,11 @@ class CompoundSigOperator(SigOperator):
         self.right = right_operator
 
     def apply(self, container: SigContainer):
-        self.prepare(container)
+        container = self.prepare_container(container)
         return container | self.left | self.right
 
     def log(self):
-        return "&"
+        return "#COMP"
 
 
 class Print(IdentityOperator):
@@ -111,7 +115,7 @@ class Print(IdentityOperator):
         self.header = header
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         if self.header:
             print(container.id, file=self.output)
             print("-"*40, file=self.output)
@@ -121,10 +125,11 @@ class Print(IdentityOperator):
 
 class SigModifierOperator(SigOperator):
     """
-    Abstract class for operators which modify signal data
+    Abstract class for operators which modify signal data.
     """
-    def prepare(self, container: SigContainer) -> None:
-        container.d.make_folder("meta", overwrite=True)
+    def prepare_container(self, container: SigContainer) -> SigContainer:
+        return SigContainer(container.d.deepcopy(shared_folders=["annotations"],
+                                                 empty_folders=["meta"]))
 
 
 class Sample(SigModifierOperator):
@@ -137,18 +142,16 @@ class Sample(SigModifierOperator):
         Args:
             start: start point of sample. integer: sample number, float: time in seconds,
                    np.timedelta64: time represented by standard time representation of numpy)
-             end: end point of sample (see `start` for interpretation)
+            end: end point of sample (see `start` for interpretation)
         """
         self.start = start
         self.end = end
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         fs = container.d["signals/fs"]
-        start = PartitionerTool.to_sample(self.start, fs,
-                                          PartitionerTool.time_unit_mapper(self.start))
-        end = PartitionerTool.to_sample(self.end, fs,
-                                        PartitionerTool.time_unit_mapper(self.end))
+        start = TimeUnit.to_sample(self.start, fs, TimeUnit.time_unit_mapper(self.start))
+        end = TimeUnit.to_sample(self.end, fs, TimeUnit.time_unit_mapper(self.end))
         container.d["signals/data"] = container.d["signals/data"][:, start:end]
 
         if "annotations" in container.d:
@@ -159,7 +162,7 @@ class Sample(SigModifierOperator):
         return container
 
     def log(self):
-        return f"samp({str(self.start)}, {str(self.end)})"
+        return f"SAMP@{str(self.start)}@{str(self.end)}"
 
 
 class ChannelSelect(SigOperator):
@@ -173,36 +176,45 @@ class ChannelSelect(SigOperator):
         """
         self.selector = selector
 
+    def prepare_container(self, container: SigContainer) -> SigContainer:
+        return SigContainer(container.d.deepcopy(shared_folders=["annotations"],
+                                                 empty_folders=["signals"]))
+
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
-        container.d["signals/data"] = container.d["signals/data"][self.selector, :]
-        container.d["signals/channels"] = np.array(container.d["signals/channels"])[self.selector]
-        container.d["signals/units"] = np.array(container.d["signals/units"])[self.selector]
-        # TODO: constraints meta data including fft to selected channels
-        return container
+        nc = self.prepare_container(container)
+        nc.d["signals/data"] = container.d["signals/data"][self.selector, :]
+        nc.d["signals/channels"] = np.array(container.d["signals/channels"])[self.selector]
+        nc.d["signals/units"] = np.array(container.d["signals/units"])[self.selector]
+        nc.d["signals/fs"] = container.d["signals/fs"]
+        nc.d.map(lambda a: a[self.selector], root="meta")
+        return nc
 
     def log(self):
-        return f"chsel({self.selector})"
+        return f"CHSEL@{','.join(str(s) for s in self.selector)}"
 
 
 class MetaProducerOperator(SigOperator):
     """
     Abstract class for operators which product metadata (i.e. data inferred from signals)
     """
-    pass
+    def prepare_container(self, container: SigContainer) -> SigContainer:
+        return SigContainer(container.d.deepcopy(["signals", "annotation"]))
 
 
 class FeatureExtraction(MetaProducerOperator):
     """
     Extraction of basic features of signal.
     """
-    def __init__(self, target: str = "features",
-                 wamp_threshold: Union[float, Sequence[float]] = ()):
+    def __init__(self, wamp_threshold: Union[float, Sequence[float]] = ()):
+        """
+        Args:
+            wamp_threshold:  threshold value (or sequence of values) foe WAMP feature
+        """
         self.wamp_threshold = seq_wrap(wamp_threshold)
-        self.target = target
+        self.target = "features"
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         n = container.sample_count
         data = container.d["signals/data"]
         absum = np.sum(np.abs(data), axis=1)
@@ -233,19 +245,23 @@ class FeatureExtraction(MetaProducerOperator):
         return container
 
     def log(self) -> str:
-        return f"fex({self.target})"
+        return f"FEX"
 
 
 class SplitterOperator(SigOperator):
     """
     Abstract class for splitters (i.e. operators which split container into several containers
-    (segments) that can be processes independently as sequence of container
+    (segments) that can be processes independently as sequence of container.
     """
-
     def container_factory(self, container: SigContainer, a: int, b: int,
                           splitter_id: str) -> SigContainer:
-        c = SigContainer.from_container(container, a, b)
-        c.d["log"].append(f"{splitter_id}@{a}:{b}")
+        c = SigContainer(container.d.deepcopy(empty_folders=["meta", "annotations"]))
+        c.d["signals/data"] = c.d["signals/data"][:, a:b]
+        newlog = list(c.d["log"])
+        newlog.append(f"{splitter_id}@{a}-{b}")
+        c.d["log"] = newlog
+        if "annotations" in container.d:
+            c.d["annotations"].update(SigContainer.cut_annots(container.d["annotations"], a, b))
         return c
 
 
@@ -259,11 +275,12 @@ class SampleSplitter(SplitterOperator):
         self.points = points
 
     def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        container = self.prepare_container(container)
         fs = container.d["signals/fs"]
-        limits = [PartitionerTool.to_sample(point, fs, PartitionerTool.time_unit_mapper(point))
+        limits = [TimeUnit.to_sample(point, fs, TimeUnit.time_unit_mapper(point))
                   for point in self.points]
         limits.sort()
-        return [self.container_factory(container, a, b, f"split")
+        return [self.container_factory(container, a, b, "SPL")
                 for a, b in zip(limits, limits[1:])]
 
 
@@ -285,14 +302,14 @@ class MarkerSplitter(SplitterOperator):
         self.right_segment = right_outer_segment
 
     def apply(self, container: SigContainer) -> Sequence[SigContainer]:
-        self.prepare(container)
+        container = self.prepare_container(container)
         limits = container.get_annotation_positions(self.aspec, TimeUnit.SAMPLE,
                                                     container.d["signals/fs"])
         if self.left_segment and limits[0] != 0:
             limits = np.insert(limits, 0, 0)
         if self.right_segment and limits[-1] != container.sample_count - 1:
             limits = np.append(limits, [container.sample_count])
-        return [self.container_factory(container, a, b, f"msplit[{self.aspec}]")
+        return [self.container_factory(container, a, b, f"MSPL@{self.aspec}]")
                 for a, b in zip(limits, limits[1:])]
 
 
@@ -306,8 +323,9 @@ class SimpleBranching(SigOperator):
 
     @staticmethod
     def container_factory(container: SigContainer):
-        c = SigContainer.from_container(container, 0, container.sample_count, copy_meta=True)
-        return c
+        nc = SigContainer(container.d.deepcopy())
+        nc.d["log"] = list(nc.d["log"])
+        return nc
 
 
 class Tee(SimpleBranching):
@@ -320,10 +338,13 @@ class Tee(SimpleBranching):
         super().__init__(branch)
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         copy = SimpleBranching.container_factory(container)
         copy | self.branch
         return container
+
+    def log(self):
+        return "#TEE"
 
 
 class AltOptional(SimpleBranching):
@@ -336,10 +357,13 @@ class AltOptional(SimpleBranching):
         super().__init__(alternative)
 
     def apply(self, container: SigContainer) -> Sequence[SigContainer]:
-        self.prepare(container)
+        container = self.prepare_container(container)
         copy = SimpleBranching.container_factory(container)
         acontainer = copy | self.branch
         return container, acontainer
+
+    def log(self):
+        return "#ALTOPT"
 
 
 class UfuncOnSignals(SigModifierOperator):
@@ -353,24 +377,27 @@ class UfuncOnSignals(SigModifierOperator):
         self.ufunc = ufunc
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         container.d["signals/data"] = self.ufunc(container.d["signals/data"])
         return container
 
     def log(self):
         if hasattr(self.ufunc, "__name__"):
-            return f"ufunc%{self.ufunc.__name__}"
+            return f"UF@{self.ufunc.__name__}"
         else:
-            return "ufunc"
+            return "UF"
 
 
 class Convolution(SigModifierOperator):
-    def __init__(self, v: np.ndarray):
+    """
+    Convolution of signal data (all signals)
+    """
+    def __init__(self, v: Sequence[float]):
         self.v = np.array(v, dtype=np.float)
         self.sum = np.sum(self.v)
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         result = np.empty_like(container.d["signals/data"])
         for i in range(container.channel_count):
             result[i] = np.convolve(container.d["signals/data"][i, :], self.v,
@@ -379,7 +406,7 @@ class Convolution(SigModifierOperator):
         return container
 
     def log(self):
-        return f"conv({smart_tostring(self.v).strip()})"
+        return f"CONV@{len(self.v)}"
 
 
 class CrossCorrelation(SigModifierOperator):
@@ -388,13 +415,13 @@ class CrossCorrelation(SigModifierOperator):
         self.sum = np.sum(self.v)
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         container.d["signals/data"] = sig.correlate(container.d["signals/data"],
                                                     self.v) / self.sum
         return container
 
     def log(self):
-        return f"corr({smart_tostring(self.v).strip()})"
+        return f"CORR@{len(self.v)}"
 
 
 class Fft(MetaProducerOperator):
@@ -403,15 +430,25 @@ class Fft(MetaProducerOperator):
         self.target = "meta/" + target
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         container.d[self.target + "/data"] = fft.rfft(container.d["signals/data"], self.n, axis=1)
         container.d[self.target + "/channels"] = container.d["signals/channels"]
         container.d[self.target + "/fs"] = container.d["signals/fs"]
         return container
 
+    def log(self):
+        return "FFT"
+
 
 class Hdf5(IdentityOperator):
+    """
+    Serializer of containers to HDF5 file
+    """
     def __init__(self, filename):
+        """
+        Args:
+            filename: name of hdf5 file
+        """
         self.filename = filename
 
     @staticmethod
@@ -435,7 +472,7 @@ class Hdf5(IdentityOperator):
 
     def apply(self, container: SigContainer) -> SigContainer:
         import h5py
-        self.prepare(container)
+        container = self.prepare_container(container)
         file = self.filename.format(container)
         with h5py.File(file, "w") as f:
             for path, value in container.d:
@@ -459,9 +496,11 @@ class PResample(SigModifierOperator):
         """
         Resampling of signal to sample frequency up * actual_frequency / down (exactly) or to
         new_freq (approximation with small up and down scales is used)
-        :param up: upscaling parameter (only int are supported)
-        :param down: downscaling parameter (inly int is supported)
-        :param new_freq: target new frequency (optimal approximate fraction up/down is used)
+
+        Args:
+            up: upscaling parameter (only int are supported)
+            down: downscaling parameter (inly int is supported)
+            new_freq: target new frequency (optimal approximate fraction up/down is used)
         """
         if up is not None and down is not None and new_freq is None :
             self.up = up
@@ -475,7 +514,7 @@ class PResample(SigModifierOperator):
             raise AttributeError("Invalid parameters")
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         if self.new_freq is not None:
             f = fractions.Fraction(self.new_freq / container.d["signals/fs"]).limit_denominator(100)
             self.up = f.numerator
@@ -483,26 +522,38 @@ class PResample(SigModifierOperator):
         container.d["signals/data"] = sig.resample_poly(container.d["signals/data"],
                                                         self.up, self.down, axis=1)
         container.d["signals/fs"] = self.up * container.d["signals/fs"] / self.down
-        andict = container.d["annotations"]
-        for ann in andict:
-            andict[ann]["samples"] = [self.up * sample // self.down
-                                      for sample in andict[ann]["samples"]]
+        if "annotations" in container.d:
+            andict = container.d["annotations"]
+            for ann in andict.keys():
+                print(ann)
+                andict[ann]["samples"] = [self.up * sample // self.down
+                                          for sample in andict[ann]["samples"]]
         return container
 
     def log(self):
-        return (f"resample({self.up}/{self.down})" if self.up is not None
-                else f"resample({self.new_freq})")
+        return (f"RSAM@{self.up}-{self.down}" if self.up is not None
+                else f"RSAM@{self.new_freq}")
 
 
 class Reaper(IdentityOperator):
+    """
+    Storage of containers or their fragments into dictionary
+    """
     def __init__(self, store: MutableMapping[str, Any], store_key: str,
                  data_key: Optional[str] = None):
+        """
+        Args:
+            store:  dictionary serving as storage
+            store_key: key of saved data in dictionary
+            data_key: path to part of hierarchical dictionary or None
+                      (whole container is stored)
+        """
         self.store = store
         self.skey = store_key
         self.dkey = data_key
 
     def apply(self, container: SigContainer) -> SigContainer:
-        self.prepare(container)
+        container = self.prepare_container(container)
         skey = self.skey.format(container)
         self.store[skey] = container[self.dkey] if self.dkey is not None else container
         return container

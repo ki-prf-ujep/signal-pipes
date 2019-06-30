@@ -104,6 +104,9 @@ class GraphOrganizer:
 
 
 class BasePlot(MaybeConsumerOperator):
+    """
+    Abstract base class for plotting operators)
+    """
     def __init__(self,
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  *,
@@ -153,6 +156,9 @@ class BasePlot(MaybeConsumerOperator):
 
 
 class FftPlot(BasePlot):
+    """
+    Plot spectrum of signal (i.e. output of Fft operator)
+    """
     def __init__(self,
                  source: str = "fft",
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
@@ -194,24 +200,23 @@ class Plot(BasePlot):
                  signal_opts: SignalOpts = SignalOpts(),
                  annot_opts: AnnotOpts = AnnotOpts()) -> None:
         """
-        :param graph_specs: specification of signals for (sub)graphs
-            examples:
-                None (optional): one subgraph per each signals = [0, 2, ..., n-1]
-                [()]: one graph with all signals = [(0, 2, ..., n-1)]
-                [0,1,(3,4)]: three subgraphs, the first graph with signal 0,
-                                              the second graph with signal 1,
-                                              the third graph with two signals (3 and 4)
-                [(), 1]: two subgraphs, first with all signals, second with second (=1) signal
-        :param annot_specs: specification of added annotations
-            examples:
-                None (optional): none annotation in any subgraph
-                ["x"]: annotation "x" in the first subgraph
-                [("x", "y")]: annotations "a" and "y" in the first subgraph
-                ["x", ("y", "z")]: annotation "x" in the first subgraph,
-                                   annotations "y" and "z" in the second subgraph
-                [None, None, "x"]: annotation "x" in the third subgraph
-        :param file: file name of target image file or None (application return directly
-                        matplotlib figure)
+        Args:
+            graph_specs: specification of signals for (sub)graphs
+                - None (optional): one subgraph per each signals = [0, 2, ..., n-1]
+                - [()]: one graph with all signals = [(0, 2, ..., n-1)]
+                - [0,1,(3,4)]: three subgraphs, the first graph with signal 0,
+                  the second graph with signal 1,
+                  the third graph with two signals (3 and 4)
+                - [(), 1]: two subgraphs, first with all signals, second with second (=1) signal
+            annot_specs: specification of added annotations
+                - None (optional): none annotation in any subgraph
+                - ["x"]: annotation "x" in the first subgraph
+                - [("x", "y")]: annotations "a" and "y" in the first subgraph
+                - ["x", ("y", "z")]: annotation "x" in the first subgraph,
+                   annotations "y" and "z" in the second subgraph
+                - [None, None, "x"]: annotation "x" in the third subgraph
+            file: file name of target image file or None (application return directly
+                  matplotlib figure)
         """
         super().__init__(graph_specs, file=file, graph_opts=graph_opts,
                          signal_opts=signal_opts)

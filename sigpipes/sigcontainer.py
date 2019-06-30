@@ -1,10 +1,35 @@
 import re
-from typing import Sequence, Any, Union
+from typing import Sequence, Any, Union, Dict, Optional, Callable
 from re import split
 
 import numpy as np
 from sigpipes.auxtools import type_info, smart_tostring, TimeUnit
 import h5py
+
+
+def folder_copy(newdict: Dict[str, Any], olddict: Dict[str, Any],
+                segpath: str, shared_folders: Sequence[str],
+                empty_folders: Sequence[str]) -> None:
+    for key, value in olddict.items():
+        itempath = f"{segpath}/{key}" if segpath != "" else key
+        if isinstance(value, dict):
+            if itempath in empty_folders:
+                newdict[key] = {}
+            elif itempath in shared_folders:
+                newdict[key] = olddict[key]
+            else:
+                newdict[key] = {}
+                folder_copy(newdict[key], olddict[key], itempath, shared_folders, empty_folders)
+        else:
+            newdict[key] = value
+
+
+def hdict_map(d: Dict[str, Any], function):
+    for key, value in d.items():
+        if isinstance(value, dict):
+            hdict_map(value, function)
+        else:
+            d[key] = function(value)
 
 
 class HierarchicalDict:
@@ -13,8 +38,8 @@ class HierarchicalDict:
     Individual levels in hierarchical keys are separated by slashes (initial or final slashes
     are optional).
     """
-    def __init__(self):
-        self.root = {}
+    def __init__(self, root: Dict[str, Any] = None):
+        self.root = {} if root is None else root
 
     def _create_path(self, key: str):
         path = split(r"/+", key.strip("/"))
@@ -42,8 +67,7 @@ class HierarchicalDict:
 
     def __getitem__(self, key: str) -> Any:
         """
-        Get value with given hierarchical key (path).
-        Empty path is invalid.
+        Get value with given hierarchical key (path). Empty path is invalid.
         """
         path = split(r"/+", key.strip("/"))
         adict = self.root
@@ -58,8 +82,7 @@ class HierarchicalDict:
 
     def __contains__(self, key: str) -> bool:
         """
-        Testing existence of given hierarchical key (in the form of leaf value or
-        folder).
+        Testing existence of given hierarchical key (in the form of leaf value or folder).
         """
         path = split(r"/+", key.strip("/"))
         adict = self.root
@@ -69,14 +92,38 @@ class HierarchicalDict:
             adict = adict[folder]
         return True
 
-    def make_folder(self, key: str, *, overwrite=False) -> None:
+    def deepcopy(self, shared_folders: Sequence[str]=[],
+                 empty_folders: Sequence[str] = [],
+                 root: Optional[str] = None) -> "HierarchicalDict":
+        """
+        Deep copy of folders of hierarchical tree or subtree (leaf values are not
+        duplicated)
+
+        Args:
+            shared_folders: folders which are not duplicated but they are shared
+            empty_folders: folders, which contents are not copied
+                (i.e. folders are empty in duplicate]
+            root: path to copied subtree (if None all tree is copied]
+
+        Returns:
+            duplicate or partial duplicate
+        """
+        new_hdict = {}
+        folder_copy(new_hdict, self.root if root is None else self[root], "",
+                    shared_folders, empty_folders)
+        return HierarchicalDict(new_hdict)
+
+    def make_folder(self, key: str) -> None:
         """
         Creation of empty folder with given path (all levels of path are
         created)
+
+        Args:
+            key: path to new folder
         """
         path, adict = self._create_path(key)
         folder_name = path[-1]
-        if not overwrite and folder_name in adict:
+        if folder_name in adict:
             raise KeyError(f"key {folder_name} exists")
         adict[folder_name] = {}
 
@@ -85,6 +132,17 @@ class HierarchicalDict:
 
     def __repr__(self):
         return HierarchicalDict.rec_print(self.root, 0)
+
+    def map(self, function: Callable[[Any], Any], root: Optional[str] = None):
+        """
+        Map (unary) function on all values of given subtree. Map changes original subtree
+        (no duplication is performed).
+
+        Args:
+            function: mapping function (it must be defined for all values in subtree)
+            root: path to subtree (or None if the whole hierarchical is modified)
+        """
+        hdict_map(self.root if root is None else self[root], function)
 
     @staticmethod
     def rec_print(d, level: int):
@@ -113,36 +171,21 @@ class SigContainer:
     """
     def __init__(self, data: HierarchicalDict) -> None:
         """
-        Private constructor. Use factory methods: from_signal_array or from_hdf5.
+        Private constructor. Use factory methods: `from_signal_array` or `from_hdf5.`
         """
         self.d = data
-
-    @staticmethod
-    def from_container(container: "SigContainer", a: int, b: int, *, copy_meta=False):
-        d = HierarchicalDict()
-        d["signals/data"] = container.d["signals/data"][:, a:b]
-        d["signals/channels"] = container.d["signals/channels"]
-        d["signals/units"] = container.d["signals/units"]
-        d["signals/fs"] = container.d["signals/fs"]
-
-        d["log"] = list(container.d["log"])
-        if "annotations" in container.d:
-            anns = SigContainer.cut_annots(container.d["annotations"], a, b)
-            d.make_folder("annotations")
-            d["annotations"].update(anns)
-        d.make_folder("meta")
-        if copy_meta:
-            d["meta"].update(container.d["meta"])
-        return SigContainer(d)
 
     @staticmethod
     def from_signal_array(signals: np.ndarray, channels: Sequence[str],
                   units: Sequence[str], fs: float = 1.0) -> "SigContainer":
         """
-        :param signals: signals as 2D array, channels in rows
-        :param channels: identifiers of channels
-        :param units:  units of channels data
-        :param fs: (common) sampling frequency
+        Creation of container from signal data (in numpy array) and basic metadata.
+
+        Args:
+            signals: signals as 2D array, channels in rows
+            channels: identifiers of channels
+            units:  units of channels data
+            fs: (common) sampling frequency
         """
         d = HierarchicalDict()
         d["signals/data"] = signals
@@ -158,14 +201,16 @@ class SigContainer:
                        samples: Sequence[int], types: Sequence[str],
                        notes: Sequence[str]) -> "SigContainer":
         """
-        Add set of annotations to container.
+        Add the set of annotations to container.
         See https://physionet.org/physiobank/annotations.shtml for detailed description.
-        :param annotator: short identifier of source of this annotations
-        :param samples:  list of annotated samples in signal
-        :param types:  list of short (one character) identification of individual annotations
-                       (one per list of samples)
-        :param notes:  longer description of individual annotations
-                       (one per record in list of samples)
+
+        Args:
+            annotator: short identifier of source of this annotations
+            samples:  list of annotated samples in signal
+            types:  list of short (one character) identification of individual annotations
+                    (one per list of samples)
+            notes:  longer description of individual annotations
+                    (one per record in list of samples)
         """
         self.d[f"annotations/{annotator}/samples"] = samples
         self.d[f"annotations/{annotator}/types"] = types
@@ -174,12 +219,15 @@ class SigContainer:
 
     def __getitem__(self, key: str) -> Any:
         """
-        getter for container data (signals, annotations, auxiliary data)
+        Getter for container data (signals, annotations, metadata, etc-)
         """
         return self.d[key]
 
     @property
     def signals(self):
+        """
+        Signal data (2D numpy array)
+        """
         return self.d["signals/data"]
 
     def __str__(self):
@@ -187,8 +235,10 @@ class SigContainer:
 
     def get_channel_triple(self, i):
         """
-        get information for i-th channel
-        :return: triple (data of channel, channel id, channel unit)
+        Auxiliary getter for signal of  i-th channel with metadata.
+
+        Returns:
+            triple (data of channel, channel id, channel unit)
         """
         return (self.d["signals/data"][i, :], self.d["signals/channels"][i],
                 self.d["signals/units"][i])
@@ -196,29 +246,30 @@ class SigContainer:
     @property
     def sample_count(self):
         """
-        :return: number of samples in signal
+        Number of samples in signal.
         """
         return self.d["signals/data"].shape[1]
 
     @property
     def channel_count(self):
         """
-        :return: numberf of channels
+        Number of channels,
         """
         return self.d["signals/data"].shape[0]
 
     @property
     def id(self):
         """
-        :return: unique identifier of container state (sequence of modification performed
-        on container). This identifier can be used as unique filename for outputs.
+            Unique identifier of container state (sequence of modifications performed
+            on container). This identifier can be used as unique filename for outputs.
         """
         return "~".join(op for op in self.d["log"]
                         if not op.startswith("#")).replace(".", ",").replace(" ", "")
 
     def x_index(self, index_type: TimeUnit, fs: Union[int, float]):
         """
-        X-axis array for signal data in given time units (time representation).
+        Returns:
+            X-axis array for signal data in given time units (time representation).
         """
         if index_type == TimeUnit.SAMPLE:
             index = np.arange(0, self.sample_count)
@@ -234,11 +285,12 @@ class SigContainer:
     def get_annotation_positions(self, specifier: str, index_type: TimeUnit,
                                  fs: Union[int, float]):
         """
-        Positions of annotations (markers) in given time units (time representation)
-        :param specifier: identification of annotation source (annotator)
-        :param index_type: time line representation
-        :param fs: sample frequency
-        :return:
+        Positions of annotations (markers) in given time units (time representation).
+
+        Args:
+            specifier: identification of annotation source (annotator)
+            index_type: time line representation
+            fs: sample frequency
         """
         annotator, achar, astring = SigContainer.annotation_parser(specifier)
         if annotator not in self.d["annotations"]:

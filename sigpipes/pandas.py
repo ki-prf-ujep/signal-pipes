@@ -6,7 +6,17 @@ import pandas as pd
 
 
 class DataFrame(MaybeConsumerOperator):
-    def __init__(self, file: str = None, time_unit: TimeUnit = TimeUnit.SECOND):
+    """
+    Transformation signal part of container into pandas dataframe.
+    """
+    def __init__(self, file: str = None, *, time_unit: TimeUnit = TimeUnit.SECOND):
+        """
+        Args:
+            file:  name of file to which the dataframe is stored
+            (in native pandas pickle format), if it is None the dataframe is returned by apply
+            method as main result (i.e operator is final consumer in pipeline)
+            time_unit: row index units (natural integer numbering of samples or real time units)
+        """
         self.to_file = file
         self.time_unit = time_unit
 
