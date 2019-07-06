@@ -1,5 +1,5 @@
 from sigpipes.sigcontainer import SigContainer
-import numpy as np
+
 from sigpipes.physionet import PhysionetRecord
 from sigpipes.megawin import MegaWinMatlab
 
@@ -146,3 +146,12 @@ def test_subsample(megawindata):
     p = megawindata | ChannelSelect([1]) | Sample(0.0, 10.0) | Tee(Sample(10, 20) | Reaper(r, "tee"))
     assert p.sample_count == 10_000
     assert r["tee"].sample_count == 10
+
+
+def test_correlation(megawindata):
+    c = megawindata | Alternatives(
+                        CrossCorrelation(np.ones(10)) | FeatureExtraction(),
+                        CrossCorrelation(np.ones(20)) | FeatureExtraction(),
+                        CrossCorrelation(np.ones(30)) | FeatureExtraction())
+    assert len(c) == 3
+    assert c[0]["meta/features/MAV"][0] > c[1]["meta/features/MAV"][0] > c[2]["meta/features/MAV"][0]

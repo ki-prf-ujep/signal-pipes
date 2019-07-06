@@ -22,6 +22,7 @@ class DataFrame(MaybeConsumerOperator):
 
     def apply(self, container: SigContainer) -> Union[SigContainer, pd.DataFrame]:
         df = pd.DataFrame(data=container.d["signals/data"].transpose(),
+                          columns=container.d["signals/channels"],
                           index=container.x_index(self.time_unit, container.d["signals/fs"]))
         if self.to_file is None:
             return df

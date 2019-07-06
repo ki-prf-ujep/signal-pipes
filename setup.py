@@ -17,7 +17,7 @@ setup(
     url="",
     author="Department of Informatics, Faculty of Science, University of J.E. Purkyne in Usti nad Labem ",
     author_email="Jiri.Fiser@ujep.cz",
-    license="MIT",
+    license="Apache Software License",
     classifiers=[
         "Topic :: Scientific/Engineering :: Bio-Informatics",
         "License :: OSI Approved :: Apache Software License",

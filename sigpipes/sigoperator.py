@@ -315,11 +315,11 @@ class MarkerSplitter(SplitterOperator):
 
 class SimpleBranching(SigOperator):
     """
-    Abstract class for branching operators i.e  operators bifurcating stream to two branches
-    which are initially identical (on the same container).
+    Abstract class for branching operators i.e  operators bifurcating stream to two or more branches
+    which are initially identical (based on the same container).
     """
-    def __init__(self, branch: SigOperator):
-        self.branch = branch
+    def __init__(self,   *branches):
+        self.branches = branches
 
     @staticmethod
     def container_factory(container: SigContainer):
@@ -330,17 +330,23 @@ class SimpleBranching(SigOperator):
 
 class Tee(SimpleBranching):
     """
-    Tee branching operator. The secondary bifurcated stream is processed by operator
-    (typically compound operator) in parameter `branch` and closed. Primary stream is returned
-    value.
+    Tee branching operator. For each parameters of constructor the container is duplicated
+    and processed by pipeline passed by this parameter (i.e. all pipelines have the same source,
+    but they are independent). Only original container is returned (i.e. only one streamm continues)
     """
-    def __init__(self, branch: SigOperator):
-        super().__init__(branch)
+    def __init__(self, *branches):
+        """
+        Args:
+            *branches:  one or more parameters in the form of signals operators (including whole
+            pipelines in the form of compound operator)
+        """
+        super().__init__(*branches)
 
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
-        copy = SimpleBranching.container_factory(container)
-        copy | self.branch
+        for branch in self.branches:
+            copy = SimpleBranching.container_factory(container)
+            copy | branch
         return container
 
     def log(self):
@@ -349,21 +355,51 @@ class Tee(SimpleBranching):
 
 class AltOptional(SimpleBranching):
     """
-    Alternative branching operator.  The secondary bifurcated stream is processed by operator
-    (typically compound operator) in parameter `branch`. Both streams are returned as sequence
-    of operators.
+    Alternative branching operator.  For each parameters of constructor the container is duplicated
+    and processed by pipeline passed by this parameter (i.e. all pipelines have the same source, but they are
+    independent). List of containers are returned including original containers and all processed
+    duplicates.
     """
-    def __init__(self, alternative: SigOperator):
-        super().__init__(alternative)
+    def __init__(self, *alternatives):
+        """
+        Args:
+            *branches:  one or more parameters in the form of signals operators (including whole
+            pipelines in the form of compound operator)
+        """
+        super().__init__(*alternatives)
 
     def apply(self, container: SigContainer) -> Sequence[SigContainer]:
         container = self.prepare_container(container)
-        copy = SimpleBranching.container_factory(container)
-        acontainer = copy | self.branch
-        return container, acontainer
+        acontainer = [container]
+        for branch in self.branches:
+            copy = SimpleBranching.container_factory(container)
+            acontainer.append(copy | branch)
+        return acontainer
 
     def log(self):
         return "#ALTOPT"
+
+
+class Alternatives(SimpleBranching):
+    """
+    Alternative branching operator.  For each parameters of constructor the container is duplicated
+    and processed by pipeline passed by this parameter (i.e. all pipelines have the same source, but they are
+    independent). List of containers are returned including all processed duplicates.
+    """
+
+    def __init__(self, *alternatives):
+        super().__init__(*alternatives)
+
+    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        container = self.prepare_container(container)
+        acontainer = []
+        for branch in self.branches:
+            copy = SimpleBranching.container_factory(container)
+            acontainer.append(copy | branch)
+        return acontainer
+
+    def log(self):
+        return "#ALT"
 
 
 class UfuncOnSignals(SigModifierOperator):
@@ -416,8 +452,11 @@ class CrossCorrelation(SigModifierOperator):
 
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
-        container.d["signals/data"] = sig.correlate(container.d["signals/data"],
-                                                    self.v) / self.sum
+        result = np.empty_like(container.d["signals/data"])
+        for i in range(container.channel_count):
+            result[i] = np.correlate(container.d["signals/data"][i, :], self.v,
+                                     mode="same") / self.sum
+        container.d["signals/data"] = result
         return container
 
     def log(self):
