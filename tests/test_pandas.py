@@ -13,6 +13,6 @@ def megawindata(request):
 
 def test_pandas(megawindata):
     df = megawindata | DataFrame()
-    for i in range(df.channel_count):
+    for i in range(megawindata.channel_count):
         assert np.all(df.loc[:, megawindata["signals/channels"][i]]
                                 == megawindata["signals/data"][i])
