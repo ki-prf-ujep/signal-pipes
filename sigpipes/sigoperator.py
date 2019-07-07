@@ -205,13 +205,18 @@ class FeatureExtraction(MetaProducerOperator):
     """
     Extraction of basic features of signal.
     """
-    def __init__(self, wamp_threshold: Union[float, Sequence[float]] = ()):
+    def __init__(self, *, wamp_threshold: Union[float, Sequence[float]] = (),
+                 zc_diff_threshold: float = 0.0, zc_mul_threshold = 0.0,
+                 sc_threshold: float = 0.0):
         """
         Args:
             wamp_threshold:  threshold value (or sequence of values) foe WAMP feature
         """
         self.wamp_threshold = seq_wrap(wamp_threshold)
         self.target = "features"
+        self.zc_diff_threshold = zc_diff_threshold
+        self.zc_mul_threshold = zc_mul_threshold
+        self.sc_threshold = sc_threshold
 
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
@@ -221,26 +226,39 @@ class FeatureExtraction(MetaProducerOperator):
         container.d[f"meta/{self.target}/IEMG"] = absum
         container.d[f"meta/{self.target}/MAV"] = absum / n
 
-        data1 = data[:, :n//4]
-        data2 = data[:, n//4:3*n//4+1]
-        data3 = data[:, 3*n//4+1:]
+        data1 = np.abs(data[:, :n//4])
+        data2 = np.abs(data[:, n//4:3*n//4+1])
+        data3 = np.abs(data[:, 3*n//4+1:])
+        wsum = np.sum(data2, axis=1)
         container.d[f"meta/{self.target}/MMAV1"] = (
-            (0.5 * np.sum(np.abs(data1), axis=1)
-             + np.sum(np.abs(data2), axis=1)
-             + 0.5 * np.sum(np.abs(data3), axis=1)) / n)
+            (0.5 * np.sum(data1, axis=1) + wsum + 0.5 * np.sum(data3, axis=1)) / n)
+
+        koef1 = 4 * np.arange(1, n//4 + 1, dtype=np.float64) / n
+        koef3 = 4 * (np.arange(3*n//4 + 2, n+1, dtype=np.float64) - n) / n
+
+        container.d[f"meta/{self.target}/MMAV2"] = (
+            (np.sum(koef1 * data1, axis=1) + wsum + np.sum(koef3 * data3, axis=1)) / n)
 
         qsum = np.sum(data * data, axis=1)
         container.d[f"meta/{self.target}/SSI"] = qsum
         container.d[f"meta/{self.target}/VAR"] = qsum / (n-1)
         container.d[f"meta/{self.target}/RMS"] = np.sqrt(qsum / n)
 
-        df = np.abs(data[:, 1:] - data[:, :-1])
+        df = np.abs(data[:, :-1] - data[:, 1:])
         container.d[f"meta/{self.target}/WL"] = np.sum(df, axis=1)
         container.d.make_folder(f"meta/{self.target}/WAMP")
         container.d[f"meta/{self.target}/WAMP"].update(
             {str(t): np.sum(np.where(df >= t, 1, 0), axis=1) for t in self.wamp_threshold})
 
         container.d[f"meta/{self.target}/LOG"] = np.exp(np.sum(np.log(np.abs(data)), axis=1) / n)
+
+        container.d[f"meta/{self.target}/ZC"] = np.sum(
+            np.where(np.logical_and(data[:, :-1] * data[:, 1:] >= self.zc_mul_threshold,
+                                    df >= self.zc_diff_threshold), 1, 0), axis=1)
+
+        container.d[f"meta/{self.target}/SC"] = np.sum(
+            np.where((data[:, 1:-1] - data[:, :-2]) * (data[:, 1:-1] - data[:, 2:])
+                     >= self.sc_threshold, 1, 0), axis=1)
 
         return container
 

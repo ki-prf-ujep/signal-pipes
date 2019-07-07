@@ -95,30 +95,33 @@ def test_partitioner(megawindata):
 def test_features(simpledata):
     r1, r2 = (simpledata | AltOptional(UfuncOnSignals(np.vectorize(lambda x: x + 1)))
                          | FeatureExtraction(wamp_threshold=0.5))
-    assert r1["/meta/features/MAV"][0] == 4/9
-    assert r1["/meta/features/MAV"][1] == 1
-    assert r2["/meta/features/MAV"][0] == 1
-    assert r2["/meta/features/MAV"][1] == 2
+    assert r1.feature("MAV")[0] == 4/9
+    assert r1.feature("MAV")[1] == 1
+    assert r2.feature("MAV")[0] == 1
+    assert r2.feature("MAV")[1] == 2
 
-    assert r1["/meta/features/VAR"][0] == 4/8
-    assert r1["/meta/features/VAR"][1] == 9/8
-    assert r2["/meta/features/VAR"][0] == 13/8
-    assert r2["/meta/features/VAR"][1] == 36/8
+    assert r1.feature("VAR")[0] == 4/8
+    assert r1.feature("VAR")[1] == 9/8
+    assert r2.feature("VAR")[0] == 13/8
+    assert r2.feature("VAR")[1] == 36/8
 
-    assert r1["/meta/features/WL"][0] == 8
-    assert r1["/meta/features/WL"][1] == 0
-    assert r2["/meta/features/WL"][0] == 8
-    assert r2["/meta/features/WL"][1] == 0
+    assert r1.feature("WL")[0] == 8
+    assert r1.feature("WL")[1] == 0
+    assert r2.feature("WL")[0] == 8
+    assert r2.feature("WL")[1] == 0
 
-    assert r1["/meta/features/WAMP"]["0.5"][0] == 8
-    assert r1["/meta/features/WAMP"]["0.5"][1] == 0
-    assert r2["/meta/features/WAMP"]["0.5"][0] == 8
-    assert r2["/meta/features/WAMP"]["0.5"][1] == 0
+    assert r1.feature("WAMP")["0.5"][0] == 8
+    assert r1.feature("WAMP")["0.5"][1] == 0
+    assert r2.feature("WAMP")["0.5"][0] == 8
+    assert r2.feature("WAMP")["0.5"][1] == 0
 
-    assert r1["/meta/features/MMAV1"][0] == 3/9
-    assert r1["/meta/features/MMAV1"][1] == 7/9
-    assert r2["/meta/features/MMAV1"][0] == 7/9
-    assert r2["/meta/features/MMAV1"][1] == 14/9
+    assert r1.feature("MMAV1")[0] == 3/9
+    assert r1.feature("MMAV1")[1] == 7/9
+    assert r2.feature("MMAV1")[0] == 7/9
+    assert r2.feature("MMAV1")[1] == 14/9
+
+    assert r2.feature("ZC")[0] == 8
+    assert r2.feature("SC")[0] == 4
 
 
 def test_convolution(simpledata):

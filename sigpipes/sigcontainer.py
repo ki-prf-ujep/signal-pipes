@@ -230,6 +230,9 @@ class SigContainer:
         """
         return self.d["signals/data"]
 
+    def feature(self, name: str):
+        return self.d[f"/meta/features/{name}"]
+
     def __str__(self):
         return str(self.d)
 
