@@ -32,9 +32,10 @@ class MegaWinMatlab:
 
     def write_to(self, record_name: str, dir_path: str, *, fmt: str = "32") -> None:
         """
-        :param record_name:  name of record (i.e. of header and data file)
-        :param dir_path: name of target directory
-        :param fmt: physionet data format for digital signals (verified formats: 16, 32)
+        Params:
+            record_name:  name of record (i.e. of header and data file)
+            dir_path: name of target directory
+            fmt: physionet data format for digital signals (verified formats: 16, 32)
         """
         import wfdb
         wfdb.wrsamp(record_name, fs=self.fs, units=self.units, p_signal=self.data,
