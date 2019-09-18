@@ -5,6 +5,7 @@ from sigpipes.megawin import MegaWinMatlab
 
 from random import sample
 from sigpipes.sigoperator import *
+from sigpipes.joiner import Sum
 import pytest
 
 
@@ -158,3 +159,12 @@ def test_correlation(megawindata):
                         CrossCorrelation(np.ones(30)) | FeatureExtraction())
     assert len(c) == 3
     assert c[0]["meta/features/MAV"][0] > c[1]["meta/features/MAV"][0] > c[2]["meta/features/MAV"][0]
+
+
+def test_scale_sum(megawindata):
+    c = megawindata | Sum(
+        Scale(2.0),
+        Scale(-0.5),
+        Scale(-0.5)
+    )
+    assert (c.signals == megawindata.signals).all()

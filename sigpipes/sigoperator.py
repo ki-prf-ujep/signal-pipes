@@ -1,5 +1,5 @@
-from sigpipes.sigcontainer import SigContainer, HierarchicalDict
-from sigpipes.auxtools import seq_wrap, smart_tostring
+from sigpipes.sigcontainer import SigContainer
+from sigpipes.auxtools import seq_wrap
 from sigpipes.auxtools import TimeUnit
 
 from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any
@@ -32,7 +32,7 @@ class SigOperator:
     def __ror__(self, container: Union[SigContainer, Sequence[SigContainer], "SigOperator"]
                 ) -> Any:
         """
-        Pipe operator for streamlining of signal oprators
+        Pipe operator for streamlining of signal operators
 
         Args:
             container:  left operand i.e signal container (input), sequence of containers
@@ -65,7 +65,7 @@ class SigOperator:
         return self.__class__.__name__
 
 
-class IdentityOperator(SigOperator):
+class Identity(SigOperator):
     """
     Base class for operators which do not modify container.
     """
@@ -77,7 +77,7 @@ class IdentityOperator(SigOperator):
         return "#" + self.__class__.__name__
 
 
-class MaybeConsumerOperator(IdentityOperator):
+class MaybeConsumerOperator(Identity):
     """
     Abstract class for operators which can works as final consumers i.e. it can produce different
     representation of signal data e.g. dataframes, matplot figures, etc.
@@ -98,7 +98,7 @@ class CompoundSigOperator(SigOperator):
         return "#COMP"
 
 
-class Print(IdentityOperator):
+class Print(Identity):
     """
     Operator which prints debug text representation into text output
     """
@@ -371,11 +371,16 @@ class Tee(SimpleBranching):
         return "#TEE"
 
 
-class AltOptional(SimpleBranching):
+class VariantsSplitter(SimpleBranching):
+    pass
+
+
+class AltOptional(VariantsSplitter):
     """
     Alternative branching operator.  For each parameters of constructor the container is duplicated
-    and processed by pipeline passed by this parameter (i.e. all pipelines have the same source, but they are
-    independent). List of containers are returned including original containers and all processed
+    and processed by pipeline passed by this parameter (i.e. all pipelines have the same source,
+    but they are independent).
+    List of containers are returned including original containers and all processed
     duplicates.
     """
     def __init__(self, *alternatives):
@@ -398,7 +403,7 @@ class AltOptional(SimpleBranching):
         return "#ALTOPT"
 
 
-class Alternatives(SimpleBranching):
+class Alternatives(VariantsSplitter):
     """
     Alternative branching operator.  For each parameters of constructor the container is duplicated
     and processed by pipeline passed by this parameter (i.e. all pipelines have the same source, but they are
@@ -440,6 +445,25 @@ class UfuncOnSignals(SigModifierOperator):
             return f"UF@{self.ufunc.__name__}"
         else:
             return "UF"
+
+
+class Scale(SigModifierOperator):
+    """
+    Scale signal by scalar.
+
+    Examples:
+        container | Scale(-1.0)
+    """
+    def __init__(self, scalar: float):
+        self.scalar = scalar
+
+    def apply(self, container: SigContainer) -> SigContainer:
+        container = self.prepare_container(container)
+        container.d["signals/data"] = self.scalar * container.d["signals/data"]
+        return container
+
+    def log(self):
+        return f"{self.scalar}x"
 
 
 class Convolution(SigModifierOperator):
@@ -497,7 +521,7 @@ class Fft(MetaProducerOperator):
         return "FFT"
 
 
-class Hdf5(IdentityOperator):
+class Hdf5(Identity):
     """
     Serializer of containers to HDF5 file
     """
@@ -592,7 +616,7 @@ class PResample(SigModifierOperator):
                 else f"RSAM@{self.new_freq}")
 
 
-class Reaper(IdentityOperator):
+class Reaper(Identity):
     """
     Storage of containers or their fragments into dictionary
     """

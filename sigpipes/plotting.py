@@ -6,6 +6,7 @@ from sigpipes.auxtools import common_value
 
 from dataclasses import dataclass
 from typing import Sequence, Union, Iterable, Optional
+from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -110,13 +111,20 @@ class BasePlot(MaybeConsumerOperator):
     def __init__(self,
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  *,
-                 file: str = None,
+                 dir: Union[Path, str] = None,
+                 file: Union[str, Path] = None,
                  graph_opts: GraphOpts = GraphOpts(),
                  signal_opts: SignalOpts = SignalOpts()) -> None:
         self.graph_signals = graph_specs
         self.graph_option = graph_opts
         self.signal_option = signal_opts
-        self.to_file = file
+        if file is not None:
+            if dir is not None:
+                self.to_file = str(Path(dir) / Path(file))
+            else:
+                self.to_file = str(Path(file))
+        else:
+            self.to_file = None
 
     def apply(self, container: SigContainer) -> Union[SigContainer, Figure]:
         fig = self.plot(container)
@@ -163,10 +171,11 @@ class FftPlot(BasePlot):
                  source: str = "fft",
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  *,
-                 file: str = None,
+                 dir: Union[Path, str] = None,
+                 file: Union[str, Path] = None,
                  graph_opts: GraphOpts = GraphOpts(),
                  signal_opts: SignalOpts = SignalOpts()) -> None:
-        super().__init__(graph_specs, file=file, graph_opts=graph_opts,
+        super().__init__(graph_specs, dir=dir, file=file, graph_opts=graph_opts,
                          signal_opts=signal_opts)
         self.source = "meta/" + source
 
@@ -195,6 +204,7 @@ class Plot(BasePlot):
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  annot_specs: Optional[Sequence[Optional[Union[str, Iterable[str]]]]] = None,
                  *,
+                 dir: str = None,
                  file: str = None,
                  graph_opts: GraphOpts = GraphOpts(),
                  signal_opts: SignalOpts = SignalOpts(),
@@ -218,7 +228,7 @@ class Plot(BasePlot):
             file: file name of target image file or None (application return directly
                   matplotlib figure)
         """
-        super().__init__(graph_specs, file=file, graph_opts=graph_opts,
+        super().__init__(graph_specs, dir=dir, file=file, graph_opts=graph_opts,
                          signal_opts=signal_opts)
         self.graph_annotations = annot_specs
         self.annotation_option = annot_opts
