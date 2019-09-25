@@ -6,10 +6,12 @@ from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any
 import collections.abc
 import sys
 import fractions
+from pathlib import Path
 
 import numpy as np
 import scipy.signal as sig
 import scipy.fftpack as fft
+
 
 
 class SigOperator:
@@ -54,6 +56,9 @@ class SigOperator:
             return CompoundSigOperator(container, self)
         else:
             raise TypeError("Unsupported left operand of pipe")
+
+    def __or__(self, other):
+        return CompoundSigOperator(self, other)
 
     def log(self):
         """
@@ -525,12 +530,15 @@ class Hdf5(Identity):
     """
     Serializer of containers to HDF5 file
     """
-    def __init__(self, filename):
+    def __init__(self, file, *, dir=None):
         """
         Args:
             filename: name of hdf5 file
         """
-        self.filename = filename
+        if dir is not None:
+            self.filename = str(Path(dir) / Path(file))
+        else:
+            self.filename = str(Path(file))
 
     @staticmethod
     def h5mapper(value):

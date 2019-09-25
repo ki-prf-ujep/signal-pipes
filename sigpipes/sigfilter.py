@@ -2,6 +2,7 @@ import numpy as np
 from sigpipes.sigoperator import SigModifierOperator
 from sigpipes.sigcontainer import SigContainer
 import scipy.signal as sig
+from typing import Any
 
 
 class Butter:
@@ -11,7 +12,7 @@ class Butter:
         self.btype = btype
 
     def __call__(self, fs: float):
-        nyq = 0.5 * fs  # Nyquist Frequency-
+        nyq = 0.5 * fs  # Nyquist Frequency
         normal_cutoff = self.cutoff / nyq  # normalization of cutoff <0,1>, 1 is nyq
         b, a = sig.butter(self.order, normal_cutoff, btype=self.btype, analog=False)
         return b, a
@@ -50,3 +51,11 @@ class MedFilt(SigModifierOperator):
 
     def log(self):
         return f"MM_{self.window_length}"
+
+
+class Hilbert(SigModifierOperator):
+    def apply(self, container: SigContainer) -> Any:
+        container = self.prepare_container(container)
+        h = sig.hilbert(container.signals, axis=1)
+        container.d["signals/data"] = np.sqrt(np.real(h)**2 + np.imag(h)**2)
+        return container

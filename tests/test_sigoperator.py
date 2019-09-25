@@ -5,6 +5,7 @@ from sigpipes.megawin import MegaWinMatlab
 
 from random import sample
 from sigpipes.sigoperator import *
+from sigpipes.sigfilter import *
 from sigpipes.joiner import Sum
 import pytest
 
@@ -168,3 +169,11 @@ def test_scale_sum(megawindata):
         Scale(-0.5)
     )
     assert (c.signals == megawindata.signals).all()
+
+
+def test_double_op(megawindata):
+        c = megawindata | Sum(
+            MedFilt(3) | MedFilt(5) | Scale(1.0),
+            MedFilt(3) | MedFilt(5) | Scale(-1.0),
+        )
+        assert (c.signals == 0.0).all()
