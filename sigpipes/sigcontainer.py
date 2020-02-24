@@ -1,11 +1,12 @@
 import re
 from typing import Sequence, Any, Union, Dict, Optional, Callable
 from re import split
+from pathlib import Path
 
 import numpy as np
 from sigpipes.auxtools import type_info, smart_tostring, TimeUnit
 import h5py
-
+import csv
 
 def folder_copy(newdict: Dict[str, Any], olddict: Dict[str, Any],
                 segpath: str, shared_folders: Sequence[str],
@@ -343,6 +344,55 @@ class SigContainer:
                 data[name] = str(item[0])
             elif type in ["ndarray", "list", "str_ndarray", "str_list"]:
                 data[name] = item.value
+
+    @staticmethod
+    def from_csv(filename: str,* ,  dir: str = None, dialect: str = "excel", header: bool = True,
+                 default_unit: str = "unit", fs=None) -> "SigContainer":
+        """
+
+        Args:
+            filename: absolute or relative file name
+            dir: base directory of relative file name (optional)
+            dialect: dialect of CSV (see CSV module)
+            header: first line is header with channels names and units (in parenthesis)
+            default_unit: default unit (if is not defined by header)
+            fs: sampling frequency, if smapling frequency is not provided, the frequency is
+                derived from first column which must containts second timestamps
+        Returns:
+
+        """
+        if dir is not None:
+            filepath = Path(dir) / Path(filename)
+        else:
+            filepath = Path(filename)
+        signals = []
+        times = []
+        units = None
+        headers = None
+        with open(filepath, "rt", newline='') as csvfile:
+            reader = csv.reader(csvfile, dialect=dialect)
+            if header:
+                row = next(reader)
+                headers = row[1:] if fs is None else row
+            for row in reader:
+                if fs is None:
+                    times.append(float(row[0]))
+                    signals.append([float(x) for x in row[1:]])
+                else:
+                    signals.append([float(x) for x in row])
+        data = np.array(signals).transpose()
+        chnum = data.shape[0]
+        if units is None:
+            units = [default_unit] * chnum
+        if headers is None:
+            headers = [f"C{i+1}" for i in range(chnum)]
+        if fs is None:
+            times = np.array(times)
+            diff = times[1:] - times[:-1]
+            fs = 1 / np.mean(diff)
+            assert np.std(diff)*fs < 1e-4, "The time differences are not equal"
+            assert all(diff > 0), "Some time steps are negative"
+        return SigContainer.from_signal_array(data, headers, units, float(fs))
 
     @staticmethod
     def cut_annots(adict, start_sample, end_sample):

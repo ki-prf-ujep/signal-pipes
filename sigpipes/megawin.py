@@ -55,3 +55,4 @@ class MegaWinMatlab:
             container.add_annotation(annotator, samples, types=symbols, notes=notes)
 
         return container
+

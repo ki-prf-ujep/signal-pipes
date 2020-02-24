@@ -13,7 +13,6 @@ import scipy.signal as sig
 import scipy.fftpack as fft
 
 
-
 class SigOperator:
     """
     Base abstract class of signal operators.
@@ -645,4 +644,34 @@ class Reaper(Identity):
         container = self.prepare_container(container)
         skey = self.skey.format(container)
         self.store[skey] = container[self.dkey] if self.dkey is not None else container
+        return container
+
+class CSVSaver(Identity):
+    """
+    Serializer of containers to CSV file
+    """
+    def __init__(self, file, *, dir=None, dialect="excel",
+                 time_unit: TimeUnit = TimeUnit.SECOND):
+        """
+        Args:
+            filename: name of CSV file
+        """
+        if dir is not None:
+            self.filename = str(Path(dir) / Path(file))
+        else:
+            self.filename = str(Path(file))
+        self.dialect = dialect
+        self.time_unit = time_unit
+
+    def apply(self, container: SigContainer) -> SigContainer:
+        import csv
+        container = self.prepare_container(container)
+        file = self.filename.format(container)
+        x = container.x_index(self.time_unit, container.d["signals/fs"])
+        with open(file, "wt", newline='') as csvfile:
+            writer = csv.writer(csvfile, dialect=self.dialect)
+            writer.writerow(["time"] + container.d["signals/channels"])
+            for i in range(container.signals.shape[1]):
+                writer.writerow([f"{val:g}" for val in
+                    np.hstack((x[i], container.signals[:,i]))])
         return container
