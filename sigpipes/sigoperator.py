@@ -580,7 +580,7 @@ class PResample(SigModifierOperator):
     Resampling using polyphase filtering
     (https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.resample_poly.html)
     """
-    def __init__(self, *, up: int = None, down: int = None,
+    def __init__(self, down: int = None, *, up: int = 1,
                  new_freq: Optional[Union[float, int]] = None):
         """
         Resampling of signal to sample frequency up * actual_frequency / down (exactly) or to
@@ -588,14 +588,14 @@ class PResample(SigModifierOperator):
 
         Args:
             up: upscaling parameter (only int are supported)
-            down: downscaling parameter (inly int is supported)
+            down: downscaling parameter (only int is supported)
             new_freq: target new frequency (optimal approximate fraction up/down is used)
         """
-        if up is not None and down is not None and new_freq is None :
+        if down is not None and new_freq is None :
             self.up = up
             self.down = down
             self.new_freq = None
-        elif up is None and down is None and new_freq is not None:
+        elif down is None and new_freq is not None:
             self.up = None
             self.down = None
             self.new_freq = new_freq
