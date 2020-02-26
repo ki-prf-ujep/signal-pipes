@@ -1,6 +1,7 @@
 from sigpipes.sigcontainer import SigContainer
 from sigpipes.auxtools import seq_wrap
 from sigpipes.auxtools import TimeUnit
+from math import sqrt, exp
 
 from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any
 import collections.abc

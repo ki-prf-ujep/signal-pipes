@@ -346,8 +346,9 @@ class SigContainer:
                 data[name] = item.value
 
     @staticmethod
-    def from_csv(filename: str,* ,  dir: str = None, dialect: str = "excel", header: bool = True,
-                 default_unit: str = "unit", fs=None) -> "SigContainer":
+    def from_csv(filename: str, * ,  dir: str = None, dialect: str = "excel", header: bool = True,
+                 default_unit: str = "unit", fs=None, transpose: bool = False,
+                 annotation: Union[str,Sequence[str]] = None) -> "SigContainer":
         """
 
         Args:
@@ -358,6 +359,7 @@ class SigContainer:
             default_unit: default unit (if is not defined by header)
             fs: sampling frequency, if smapling frequency is not provided, the frequency is
                 derived from first column which must containts second timestamps
+            annotation: filename of annotation file
         Returns:
 
         """
@@ -380,7 +382,11 @@ class SigContainer:
                     signals.append([float(x) for x in row[1:]])
                 else:
                     signals.append([float(x) for x in row])
-        data = np.array(signals).transpose()
+        if not transpose:
+            data = np.array(signals).transpose()
+        else:
+            data = np.array(signals)
+        print(data)
         chnum = data.shape[0]
         if units is None:
             units = [default_unit] * chnum
@@ -392,7 +398,22 @@ class SigContainer:
             fs = 1 / np.mean(diff)
             assert np.std(diff)*fs < 1e-4, "The time differences are not equal"
             assert all(diff > 0), "Some time steps are negative"
-        return SigContainer.from_signal_array(data, headers, units, float(fs))
+        c = SigContainer.from_signal_array(data, headers, units, float(fs))
+        if annotation is not None:
+            if isinstance(annotation, str):
+                annotation = [annotation]
+            for a in annotation:
+                with open(a, "rt") as afile:
+                    areader = csv.reader(afile)
+                    samples = []
+                    labels = []
+                    notes = []
+                    for time, label in areader:
+                        samples.append(TimeUnit.to_sample(float(time), fs, TimeUnit.SECOND))
+                        labels.append(label)
+                        notes.append("")
+            c.add_annotation(Path(a).stem, samples, labels, notes)
+        return c
 
     @staticmethod
     def cut_annots(adict, start_sample, end_sample):
