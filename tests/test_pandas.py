@@ -1,4 +1,4 @@
-from sigpipes.pandas import *
+from sigpipes.pandas_support import *
 import pytest
 from sigpipes.megawin import MegaWinMatlab
 import numpy as np

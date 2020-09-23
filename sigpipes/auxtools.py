@@ -33,7 +33,7 @@ class TimeUnit(Enum):
             raise TypeError("The time unit can not be infered or it is ambiguous")
 
     @staticmethod
-    def to_sample(shift, fs, time_unit):
+    def to_sample(shift, fs, time_unit, lag):
         """
         Transformation of time intervals (= time sifts) in samples to others representation.
 
@@ -41,14 +41,15 @@ class TimeUnit(Enum):
             shift:  time interval in samples (integral value)
             fs:  sample frequency
             time_unit:  time representation
+            lag: lag of signals (typically for cross correlation)
         """
         if time_unit == TimeUnit.SAMPLE:
-            return shift
+            return shift + lag
         elif time_unit == TimeUnit.SECOND:
-            return int(shift * fs)
+            return int(shift * fs) + lag
         elif time_unit == TimeUnit.TIME_DELTA:
             interval = int(1_000_000_000 / fs)
-            return int(shift / np.timedelta64(interval, "ns"))
+            return int(shift / np.timedelta64(interval, "ns")) + lag
 
 
 def common_value(iterable: Iterable[Any]) -> Any:

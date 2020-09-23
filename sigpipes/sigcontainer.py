@@ -8,6 +8,7 @@ from sigpipes.auxtools import type_info, smart_tostring, TimeUnit
 import h5py
 import csv
 
+
 def folder_copy(newdict: Dict[str, Any], olddict: Dict[str, Any],
                 segpath: str, shared_folders: Sequence[str],
                 empty_folders: Sequence[str]) -> None:
@@ -270,17 +271,21 @@ class SigContainer:
         return "~".join(op for op in self.d["log"]
                         if not op.startswith("#")).replace(".", ",").replace(" ", "")
 
+    @property
+    def lag(self):
+        return self.d["/signals/lag"] if "/signals/lag" in self.d else 0
+
     def x_index(self, index_type: TimeUnit, fs: Union[int, float]):
         """
         Returns:
             X-axis array for signal data in given time units (time representation).
         """
         if index_type == TimeUnit.SAMPLE:
-            index = np.arange(0, self.sample_count)
+            index = np.arange(0, self.sample_count) - self.lag
         else:
             interval = 1.0 / fs
             index = np.linspace(0.0, self.sample_count * interval, self.sample_count,
-                                endpoint=False)
+                                endpoint=False) - self.lag * interval
             if index_type == TimeUnit.TIME_DELTA:
                 index = np.fromiter((np.timedelta64(int(t * 1_000_000_000), "ns") for t in index),
                                     dtype="timedelta64[ns]")
@@ -314,7 +319,7 @@ class SigContainer:
 
     @staticmethod
     def annotation_parser(aname: str) -> Sequence[str]:
-        match = re.fullmatch(r"(\w+)(?:/(.))?(?:=(.+))?", aname)
+        match = re.fullmatch(r"([.\w]+)(?:/(.))?(?:=(.+))?", aname)
         if match:
             return match.groups()
         else:
@@ -386,7 +391,6 @@ class SigContainer:
             data = np.array(signals).transpose()
         else:
             data = np.array(signals)
-        print(data)
         chnum = data.shape[0]
         if units is None:
             units = [default_unit] * chnum

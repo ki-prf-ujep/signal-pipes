@@ -1,10 +1,10 @@
 import numpy as np
 from sigpipes.sigcontainer import SigContainer
-from sigpipes.sigoperator import SigOperator, Alternatives
+from sigpipes.sigoperator import SigOperator
 from warnings import warn
-
 from typing import Sequence
-from scipy.signal import correlate
+from scipy.signal import correlate, convolve
+
 
 class Joiner(SigOperator):
     def __init__(self, *branches):
@@ -34,6 +34,7 @@ class Joiner(SigOperator):
         if any(c.d["signals/fs"] != output.d["signals/fs"] for c in inputs):
             warn("Join operation on signals with incompatible frequencies")
 
+
 class Sum(Joiner):
     def __init__(self, *branches) -> None:
         super().__init__(*branches)
@@ -44,6 +45,7 @@ class Sum(Joiner):
             result += inc.signals
         outcontainer.d["signals/data"] = result
         return outcontainer
+
 
 class JoinChannels(Joiner):
     def __init__(self, *branches):
@@ -84,17 +86,46 @@ class Concatenate(Joiner):
             warn("Join operation on signals with incompatible frequencies")
 
 
-class CrossCorrelate(Joiner):
+class AssymetricJoiner(Joiner):
+    def assertion(self, output: SigContainer, inputs: Sequence[SigContainer]) -> None:
+        assert all(c.signals.shape[0] == output.signals.shape[0] for c in inputs)
+        if any(c.d["signals/fs"] != output.d["signals/fs"] for c in inputs):
+            warn("Join operation on signals with incompatible frequencies")
+
+
+class CrossCorrelate(AssymetricJoiner):
     def __init__(self, *branches, mode:str = 'full', method: str = 'auto'):
         super().__init__(*branches)
         self.mode = mode
         self.method = method
 
-    def assertion(self, output: SigContainer, inputs: Sequence[SigContainer]) -> None:
-        assert all(c.signals.shape[0] == output.signals.shape[0] for c in inputs)
-
     def join(self, output: SigContainer, inputs: Sequence[SigContainer]) -> SigContainer:
         assert len(inputs)<=1, "Cross corelation with more than two signal is not supported"
         in1 = output
         in2 = inputs[0] if inputs else in1
-        result = correlate(in1.signals, in2.signals, self.mode, self.method)
+        result = np.vstack([
+            correlate(in1.signals[i, :], in2.signals[i, :], self.mode, self.method)
+            for i in range(in1.signals.shape[0])
+        ])
+        output.d["signals/data"] = result
+        output.d["signals/lag"] = output.sample_count // 2
+        return output
+
+
+class Convolve(AssymetricJoiner):
+        def __init__(self, *branches, mode: str = 'full', method: str = 'auto'):
+            super().__init__(*branches)
+            self.mode = mode
+            self.method = method
+
+        def join(self, output: SigContainer, inputs: Sequence[SigContainer]) -> SigContainer:
+            assert len(inputs) <= 1, "Convolution with more than two signal is not supported"
+            in1 = output
+            in2 = inputs[0] if inputs else in1
+            result = np.vstack([
+                convolve(in1.signals[i, :], in2.signals[i, :], self.mode, self.method)
+                for i in range(in1.signals.shape[0])
+            ])
+            output.d["signals/data"] = result
+            output.d["signals/lag"] = output.sample_count // 2
+            return output

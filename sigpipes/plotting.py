@@ -5,7 +5,7 @@ from sigpipes.auxtools import CyclicList
 from sigpipes.auxtools import common_value
 
 from dataclasses import dataclass
-from typing import Sequence, Union, Iterable, Optional
+from typing import Sequence, Union, Iterable, Optional, Tuple
 from pathlib import Path
 
 import numpy as np
@@ -174,26 +174,36 @@ class FftPlot(BasePlot):
                  dir: Union[Path, str] = None,
                  file: Union[str, Path] = None,
                  graph_opts: GraphOpts = GraphOpts(),
-                 signal_opts: SignalOpts = SignalOpts()) -> None:
+                 signal_opts: SignalOpts = SignalOpts(),
+                 frange: Tuple[float, float] = None) -> None:
         super().__init__(graph_specs, dir=dir, file=file, graph_opts=graph_opts,
                          signal_opts=signal_opts)
         self.source = "meta/" + source
+        self.frange = frange
 
     def _plot_signals(self, axes: GraphOrganizer, container: SigContainer) -> None:
+        freq = container.d["/signals/fs"]
         for i, group in enumerate(self.graph_signals):
             signals = []
             for index in group:
                 y, signal_name = container.get_fft_tuple(index, self.source)
+                size = len(y)
+                if self.frange is None:
+                    imin = 0
+                    imax = size // 2
+                else:
+                    imin =  int(self.frange[0]*size / freq)
+                    imax =  int(min(self.frange[1]*size / freq, size/2))
+                y = y[imin:imax]
                 signal_name = signal_name.strip(",.:")
-                x = container.x_index(self.graph_option.time_unit.fix(),
-                                      container.d[f"{self.source}/fs"])
+                x = freq * np.arange(imin, imax) / size
                 axes[i].plot(x, y, self.signal_option.styles[index],
                              color=self.signal_option.colors[index],
                              label=signal_name if self.signal_option.legend else None)
                 signals.append(signal_name)
             axes[i].grid(self.graph_option.grid[i])
             axes[i].set_ylabel("")
-            xlabel = f"frequency"
+            xlabel = f"frequency (Hz)"
             if axes.row_of(i) == axes.rows - 1:
                 axes[i].set_xlabel(xlabel)
             axes[i].set_title(self.graph_option.title[i].format(i=i+1, signals=", ".join(signals)))

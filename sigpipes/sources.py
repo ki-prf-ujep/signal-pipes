@@ -45,7 +45,6 @@ class SynergyLP:
                         data.append(value)
         self.data = np.array(data)
         self.label = file.stem
-        self.fs = 50000
 
     def sigcontainer(self) -> SigContainer:
         container = SigContainer.from_signal_array(self.data.reshape((1,len(self.data))),

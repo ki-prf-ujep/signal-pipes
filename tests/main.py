@@ -2,7 +2,7 @@ from sigpipes.megawin import MegaWinMatlab
 from sigpipes.physionet import PhysionetRecord
 from sigpipes.sigoperator import *
 from sigpipes.plotting import *
-from sigpipes.pandas import DataFrame
+from sigpipes.pandas_support import DataFrame
 
 MegaWinMatlab("testdata/chuze A.mat").write_to("chuzeA", "records")
 p = PhysionetRecord("records/chuzeA")

@@ -1,9 +1,10 @@
+from sigpipes import features
 from sigpipes.sigcontainer import SigContainer
 from sigpipes.auxtools import seq_wrap
 from sigpipes.auxtools import TimeUnit
-from math import sqrt, exp
+import gzip
 
-from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any
+from typing import Sequence, Union, Iterable, Optional, MutableMapping, Any, Mapping
 import collections.abc
 import sys
 import fractions
@@ -12,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import scipy.signal as sig
 import scipy.fftpack as fft
-
 
 class SigOperator:
     """
@@ -155,9 +155,12 @@ class Sample(SigModifierOperator):
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
         fs = container.d["signals/fs"]
-        start = TimeUnit.to_sample(self.start, fs, TimeUnit.time_unit_mapper(self.start))
-        end = TimeUnit.to_sample(self.end, fs, TimeUnit.time_unit_mapper(self.end))
+        lag = container.lag
+        start = TimeUnit.to_sample(self.start, fs, TimeUnit.time_unit_mapper(self.start), lag)
+        end = TimeUnit.to_sample(self.end, fs, TimeUnit.time_unit_mapper(self.end), lag)
         container.d["signals/data"] = container.d["signals/data"][:, start:end]
+        container.d["signals/lag"] = lag - start
+        print(container.lag)
 
         if "annotations" in container.d:
             adict = container.d["annotations"]
@@ -205,6 +208,32 @@ class MetaProducerOperator(SigOperator):
     def prepare_container(self, container: SigContainer) -> SigContainer:
         return SigContainer(container.d.deepcopy(["signals", "annotation"]))
 
+
+class FeatureExtractor(MetaProducerOperator):
+    def __init__(self, features_dict: Mapping[str,Union[bool,float,Sequence[float]]] = None,
+                 *, wamp_threshold: Union[float, Sequence[float]] = (),
+                 zc_diff_threshold: float = (), zc_mul_threshold = (),
+                 sc_threshold: float = ()):
+        self.feature_dict = features_dict if features_dict is not None else {feature: True for feature
+                                                                                  in features.NON_THRESHOLD}
+        if wamp_threshold:
+            self.feature_dict["WAMP"] = wamp_threshold
+        if zc_diff_threshold and zc_mul_threshold:
+            self.feature_dict["ZC"] = zip(zc_diff_threshold, zc_mul_threshold)
+        if sc_threshold:
+            self.feature_dict["SC"] = sc_threshold
+
+    def apply(self, container: SigContainer) -> SigContainer:
+        container = self.prepare_container(container)
+        n = container.sample_count
+        data = container.d["signals/data"]
+        fkeys = {key for key in self.feature_dict.keys() if self.feature_dict[key]}
+        thresholds = {key : value for key,value in self.feature_dict.items() if key in features.WITH_THRESHOLD}
+        fdict = features.features(data, fkeys, thresholds)
+        path = "meta/features"
+        container.d.make_folder(path)
+        container.d[path].update(fdict)
+        return container
 
 class FeatureExtraction(MetaProducerOperator):
     """
@@ -517,7 +546,7 @@ class Fft(MetaProducerOperator):
 
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
-        container.d[self.target + "/data"] = fft.rfft(container.d["signals/data"], self.n, axis=1)
+        container.d[self.target + "/data"] = np.abs(fft.fft(container.d["signals/data"], self.n, axis=1))
         container.d[self.target + "/channels"] = container.d["signals/channels"]
         container.d[self.target + "/fs"] = container.d["signals/fs"]
         return container
@@ -544,18 +573,18 @@ class Hdf5(Identity):
     def h5mapper(value):
         if isinstance(value, np.ndarray):
             if len(value) > 0 and isinstance(value[0], str):
-                return "str_ndarray", np.array(value, dtype="S")
+                return "str_ndarray", np.array([s.encode(encoding="ascii",errors="backslashreplace") for s in value], dtype="S")
             return "ndarray", value
         if isinstance(value, list):
-            if len(value) > -0 and isinstance(value[0], str):
-                return "str_list", np.array(value, dtype="S")
+            if len(value) > 0 and isinstance(value[0], str):
+                return "str_list", np.array([s.encode(encoding="ascii",errors="backslashreplace") for s in value], dtype="S")
             return "list", np.array(value)
         if isinstance(value, float):
             return "float", np.full((1,), value, dtype=np.float)
         if isinstance(value, int):
             return "int", np.full((1,), value, dtype=np.int)
         if isinstance(value, str):
-            return "str", np.full((1,), value, dtype="S")
+            return "str", np.full((1,), value.encode(encoding="ascii",errors="backslashreplace"), dtype="S")
         else:
             raise TypeError(f"unsupported type {value.__class__} of value `{value}`")
 
@@ -614,7 +643,6 @@ class PResample(SigModifierOperator):
         if "annotations" in container.d:
             andict = container.d["annotations"]
             for ann in andict.keys():
-                print(ann)
                 andict[ann]["samples"] = [self.up * sample // self.down
                                           for sample in andict[ann]["samples"]]
         return container
@@ -652,7 +680,7 @@ class CSVSaver(Identity):
     Serializer of containers to CSV file
     """
     def __init__(self, file, *, dir=None, dialect="excel",
-                 time_unit: TimeUnit = TimeUnit.SECOND):
+                 time_unit: TimeUnit = TimeUnit.SECOND, gzipped=False):
         """
         Args:
             filename: name of CSV file
@@ -661,15 +689,19 @@ class CSVSaver(Identity):
             self.filename = str(Path(dir) / Path(file))
         else:
             self.filename = str(Path(file))
+        if gzipped:
+           self.filename += ".gzip"
         self.dialect = dialect
         self.time_unit = time_unit
+        self.gzipped =  gzipped
 
     def apply(self, container: SigContainer) -> SigContainer:
         import csv
         container = self.prepare_container(container)
         file = self.filename.format(container)
         x = container.x_index(self.time_unit, container.d["signals/fs"])
-        with open(file, "wt", newline='') as csvfile:
+        opener = open if not self.gzipped else gzip.open
+        with opener(file, "wt", newline='') as csvfile:
             writer = csv.writer(csvfile, dialect=self.dialect)
             writer.writerow(["time"] + container.d["signals/channels"])
             for i in range(container.signals.shape[1]):
