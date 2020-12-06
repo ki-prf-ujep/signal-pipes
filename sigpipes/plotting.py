@@ -1,5 +1,5 @@
 from sigpipes.auxtools import TimeUnit
-from sigpipes.sigcontainer import SigContainer
+from sigpipes.sigcontainer import SigContainer, DPath
 from sigpipes.sigoperator import MaybeConsumerOperator
 from sigpipes.auxtools import CyclicList
 from sigpipes.auxtools import common_value
@@ -31,7 +31,7 @@ class GraphOpts:
     grid: CyclicList = CyclicList([True])
     time_unit: TimeUnit = TimeUnit.SECOND
     legend_loc: str = 'upper right'
-
+    sharey: bool = False
 
 @dataclass
 class SignalOpts:
@@ -67,12 +67,12 @@ class GraphOrganizer:
     """
     Auxiliary class for organizing subgraphs in M×N matrix (where N = fixed count of columns]
     """
-    def __init__(self, size: int, columns: int):
+    def __init__(self, size: int, columns: int, sharey: bool):
         assert size >= columns, f"Number of subplots ({size}) is smaller then number of columns ({columns})"
         self.size = size
         self.rows = (size - 1) // columns + 1
         self.columns = columns
-        self.fig, self.axes = plt.subplots(self.rows, self.columns, sharex="all")
+        self.fig, self.axes = plt.subplots(self.rows, self.columns, sharex="all", sharey=sharey)
         for i in range(self.size, self.rows * self.columns):
             self._get_axes(i).remove()
         self.fig.subplots_adjust(left=0.1/self.columns, right=1-0.1/self.columns)
@@ -111,30 +111,22 @@ class BasePlot(MaybeConsumerOperator):
     def __init__(self,
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  *,
-                 dir: Union[Path, str] = None,
-                 file: Union[str, Path] = None,
+                 dir: Union[Path, str] = "",
+                 file: Union[str, Path] = "",
                  graph_opts: GraphOpts = GraphOpts(),
                  signal_opts: SignalOpts = SignalOpts()) -> None:
         self.graph_signals = graph_specs
         self.graph_option = graph_opts
         self.signal_option = signal_opts
-        if file is not None:
-            if dir is not None:
-                self.to_file = str(Path(dir) / Path(file))
-            else:
-                self.to_file = str(Path(file))
-        else:
-            self.to_file = None
+        self.filepath = DPath.from_path(file).prepend_path(DPath.from_path(dir, dir=True))
 
     def apply(self, container: SigContainer) -> Union[SigContainer, Figure]:
         fig = self.plot(container)
-        if self.to_file is None:
-            return fig
-        else:
-            file = self.to_file.format(container)
-            fig.savefig(file)
-            plt.close(fig)
-            return container
+        path = self.filepath.base_path(
+            container.basepath.extend_stem(container.id).extend_stem(self.filename_extension()).resuffix(".png"))
+        fig.savefig(str(path))
+        plt.close(fig)
+        return container
 
     def _fix_graph_signals(self, container: SigContainer) -> None:
         fcol = []
@@ -155,7 +147,7 @@ class BasePlot(MaybeConsumerOperator):
             self.graph_signals = range(container.channel_count)
         size = len(self.graph_signals)
 
-        ax = GraphOrganizer(size, self.graph_option.columns)
+        ax = GraphOrganizer(size, self.graph_option.columns, self.graph_option.sharey)
         ax.fig.set_size_inches(ax.columns * self.graph_option.graph_width,
                                ax.rows * self.graph_option.graph_height)
         self._fix_graph_signals(container)
@@ -171,8 +163,8 @@ class FftPlot(BasePlot):
                  source: str = "fft",
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  *,
-                 dir: Union[Path, str] = None,
-                 file: Union[str, Path] = None,
+                 dir: Union[Path, str] = "",
+                 file: Union[str, Path] = "",
                  graph_opts: GraphOpts = GraphOpts(),
                  signal_opts: SignalOpts = SignalOpts(),
                  frange: Tuple[float, float] = None) -> None:
@@ -208,14 +200,17 @@ class FftPlot(BasePlot):
                 axes[i].set_xlabel(xlabel)
             axes[i].set_title(self.graph_option.title[i].format(i=i+1, signals=", ".join(signals)))
 
+    def filename_extension(self):
+        return "<FFT>"
+
 
 class Plot(BasePlot):
     def __init__(self,
                  graph_specs: Optional[Iterable[Union[int, Iterable[int]]]] = None,
                  annot_specs: Optional[Sequence[Optional[Union[str, Iterable[str]]]]] = None,
                  *,
-                 dir: str = None,
-                 file: str = None,
+                 dir: str = "",
+                 file: str = "",
                  graph_opts: GraphOpts = GraphOpts(),
                  signal_opts: SignalOpts = SignalOpts(),
                  annot_opts: AnnotOpts = AnnotOpts()) -> None:
@@ -288,3 +283,5 @@ class Plot(BasePlot):
                 axis.vlines(x, bottom,
                             top + i * (top - bottom) * self.annotation_option.vertical_shift)
 
+    def filename_extension(self):
+        return ""

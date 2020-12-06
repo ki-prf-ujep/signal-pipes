@@ -1,21 +1,23 @@
 import configparser
+from collections import defaultdict
+
 import numpy as np
-from sigpipes.sigcontainer import SigContainer
+from sigpipes.sigcontainer import SigContainer, DPath
 from typing import Iterable
-from re import match, finditer
+from re import match, finditer, Pattern
 from pathlib import Path
 
+
 class SynergyLP:
-    def __init__(self, filename: str, *, dir:str = None):
-        if dir is None:
-            file = Path(filename)
-        else:
-            file = Path(dir) / Path(filename)
-        with open(file, "rt", encoding="utf-16le") as f:
+    def __init__(self, filename: str, *, dir: str = "", shortname = None, channels = None):
+        self.filepath = DPath.from_path(filename).prepend_path(DPath.from_path(dir, dir=True))
+
+        with open(str(self.filepath), "rt", encoding="utf-16le") as f:
             longline = None
             cline = False
-            data = []
+            data = defaultdict(list)
             gsize = 0
+            channel = 0
             for line in f:
                 line = line.rstrip()
                 if cline:
@@ -34,7 +36,12 @@ class SynergyLP:
                     self.fs = 1000 * float(m.group(1).replace(",","."))
                     continue
 
-                m = match(r"LivePlay Data\(mV\)<(\d+)>=(.*)", longline)
+                m = match(r"Channel\s+Number=(\d+)", longline)
+                if m:
+                    channel = int(m.group(1))-1
+                    continue
+
+                m = match(r"(?:Sweep|LivePlay)\s+Data\(mV\)<(\d+)>=(.*)", longline)
                 if m:
                     gsize += int(m.group(1))
                     dataline = m.group(2)
@@ -42,44 +49,31 @@ class SynergyLP:
                         value = int(subm.group(2)) + int(subm.group(3)) / 100
                         if subm.group(1) == "-":
                             value = -value
-                        data.append(value)
-        self.data = np.array(data)
-        self.label = file.stem
+                        data[channel].append(value)
+        self.data = data
+        self.channels = channels
+
+        if shortname is None:
+            self.shortpath = self.filepath
+        elif isinstance(shortname, Pattern):
+            stem = self.filepath.stem
+            m = shortname.search(stem)
+            if m:
+                stem = m.group(0)
+            self.shortpath = self.filepath.restem(stem)
 
     def sigcontainer(self) -> SigContainer:
-        container = SigContainer.from_signal_array(self.data.reshape((1,len(self.data))),
-                                                   channels=[self.label],
-                                                   units=["µV"], fs=self.fs)
+        if list(self.data.keys()) == [0]:
+            data = np.array(self.data[0]).reshape((1, len(self.data[0])))
+            container = SigContainer.from_signal_array(data, channels=[self.shortpath.stem], units=["mV"], fs=self.fs)
+        else: # multichannel
+            data = np.vstack(tuple(np.array(self.data[chan]).reshape(1, len(self.data[chan]))
+                             for chan in sorted(self.data.keys())))
+            if self.channels is None:
+                labels = [f"{self.shortpath.stem}: channel {chan}" for chan in sorted(self.data.keys())]
+            else:
+                labels = [f"{self.shortpath.stem}: {self.channels[chan]}" for chan in sorted(self.data.keys())]
+
+            container = SigContainer.from_signal_array(data, channels=labels, units=["mV"] * len(labels), fs=self.fs,
+                                                       basepath=str(self.shortpath))
         return container
-
-
-class Synergy:
-    def __init__(self, file_path: str, section:str):
-        c = configparser.ConfigParser()
-        with open(file_path, "rt") as f:
-            contents = f.read()
-        contents = contents.replace("/\n", ",")
-        c.read_string(contents)
-        self.fs = float(c[section]["Sampling Frequency(kHz)"].replace(",", ".")) * 1000
-        data_key = [key for key in c[section].keys() if "data" in key][0]
-        self.unit = float(c[section]["One ADC unit (µV)"].replace(",", "."))
-        self.data = np.fromiter((self.unit * float(val) for val in c[section][data_key].split(",")),
-                                   dtype=np.float64)
-        self.label = section
-
-    def sigcontainer(self) -> SigContainer:
-        container = SigContainer.from_signal_array(self.data.reshape(1,2000),
-                                                   channels=[self.label],
-                                                   units=["µV"], fs=self.fs)
-        return container
-
-    @staticmethod
-    def section_iter(file_path: str) -> Iterable[str]:
-        c = configparser.ConfigParser()
-        with open(file_path, "rt") as f:
-            contents = f.read()
-        contents = contents.replace("/\n", ",")
-        c.read_string(contents)
-        for section in c.keys():
-            if "Data" in section:
-                yield section

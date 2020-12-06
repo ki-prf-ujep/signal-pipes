@@ -1,27 +1,35 @@
+from numbers import Real
+
 import numpy as np
 from sigpipes.sigoperator import SigModifierOperator
 from sigpipes.sigcontainer import SigContainer
 import scipy.signal as sig
-from typing import Any
+from typing import Any, Union, Tuple
 
 
 class Butter:
-    def __init__(self, order: int, cutoff: float, btype: str = "lowpass"):
+    def __init__(self, order: int, cutoff: Union[Real, Tuple[Real, Real]], btype: str):
         self.order = order
         self.cutoff = cutoff
         self.btype = btype
 
     def __call__(self, fs: float):
-        nyq = 0.5 * fs  # Nyquist Frequency
-        normal_cutoff = self.cutoff / nyq  # normalization of cutoff <0,1>, 1 is nyq
-        b, a = sig.butter(self.order, normal_cutoff, btype=self.btype, analog=False)
-        return b, a
+        sos = sig.butter(self.order, self.cutoff, btype=self.btype, analog=False, output="sos", fs=fs)
+        return sos
 
     def __str__(self):
-        return "butter"
+        if self.btype == "lowpass":
+            band = f"<{self.cutoff}"
+        elif self.btype == "highpass":
+            band = f">{self.cutoff}"
+        elif self.btype == "bandpass":
+            band = f"[{self.cutoff[0]}-{self.cutoff[1]}]"
+        elif self.btype == "bandstop":
+            band = f"]{self.cutoff[0]}-{self.cutoff[1]}["
+        return f"butter{band}"
 
 
-class FiltFilt(SigModifierOperator):
+class Filter(SigModifierOperator):
     def __init__(self, coeff_generator, **params) -> None:
         self.cg = coeff_generator
         self.params = params
@@ -29,12 +37,12 @@ class FiltFilt(SigModifierOperator):
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
         fs = container.d["signals/fs"]
-        b, a = self.cg(fs)
-        container.d["signals/data"] = sig.filtfilt(b, a, container.d["signals/data"], **self.params)
+        sos = self.cg(fs)
+        container.d["signals/data"] = sig.sosfilt(sos, container.d["signals/data"], **self.params)
         return container
 
     def log(self):
-        return f"FF_{str(self.cg)}"
+        return f"{str(self.cg)}"
 
 
 class MedFilt(SigModifierOperator):

@@ -1,4 +1,6 @@
 from enum import Enum
+from pathlib import Path
+
 import numpy as np
 import collections.abc
 from typing import Sequence, Any, Iterable, Union
@@ -162,3 +164,8 @@ class CyclicList(collections.abc.Sequence):
         raise NotImplementedError("Cyclic list has infinite length")
 
 
+def resuffix(filename:str, newsuffix:str, extension:str = ""):
+    parts = list(Path(filename).parts)
+    stem = Path(parts[-1]).stem
+    parts[-1] = stem + extension + "." + newsuffix
+    return Path(*parts).absolute()

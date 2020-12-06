@@ -1,5 +1,5 @@
 from sigpipes import features
-from sigpipes.sigcontainer import SigContainer
+from sigpipes.sigcontainer import SigContainer, DPath
 from sigpipes.auxtools import seq_wrap
 from sigpipes.auxtools import TimeUnit
 import gzip
@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import scipy.signal as sig
 import scipy.fftpack as fft
+
 
 class SigOperator:
     """
@@ -160,7 +161,6 @@ class Sample(SigModifierOperator):
         end = TimeUnit.to_sample(self.end, fs, TimeUnit.time_unit_mapper(self.end), lag)
         container.d["signals/data"] = container.d["signals/data"][:, start:end]
         container.d["signals/lag"] = lag - start
-        print(container.lag)
 
         if "annotations" in container.d:
             adict = container.d["annotations"]
@@ -191,10 +191,11 @@ class ChannelSelect(SigOperator):
     def apply(self, container: SigContainer) -> SigContainer:
         nc = self.prepare_container(container)
         nc.d["signals/data"] = container.d["signals/data"][self.selector, :]
-        nc.d["signals/channels"] = np.array(container.d["signals/channels"])[self.selector]
-        nc.d["signals/units"] = np.array(container.d["signals/units"])[self.selector]
+        nc.d["signals/channels"] = np.array(container.d["signals/channels"])[self.selector].tolist()
+        nc.d["signals/units"] = np.array(container.d["signals/units"])[self.selector].tolist()
         nc.d["signals/fs"] = container.d["signals/fs"]
-        nc.d.map(lambda a: a[self.selector], root="meta")
+        if "meta" in nc.d:
+            nc.d.map(lambda a: a[self.selector], root="meta")
         return nc
 
     def log(self):
@@ -234,6 +235,7 @@ class FeatureExtractor(MetaProducerOperator):
         container.d.make_folder(path)
         container.d[path].update(fdict)
         return container
+
 
 class FeatureExtraction(MetaProducerOperator):
     """
@@ -384,7 +386,7 @@ class Tee(SimpleBranching):
     """
     Tee branching operator. For each parameters of constructor the container is duplicated
     and processed by pipeline passed by this parameter (i.e. all pipelines have the same source,
-    but they are independent). Only original container is returned (i.e. only one streamm continues)
+    but they are independent). Only original container is returned (i.e. only one stream continues)
     """
     def __init__(self, *branches):
         """
@@ -500,6 +502,55 @@ class Scale(SigModifierOperator):
         return f"{self.scalar}x"
 
 
+class MVNormalization(SigModifierOperator):
+    """
+        Mean and variance normalization
+    """
+    def __init__(self, mean: Optional[float] = 0.0, variance: Optional[float] = 1.0):
+        self.mean = mean
+        self.variance = variance
+
+    def apply(self, container: SigContainer) -> SigContainer:
+        if self.mean is not None:
+            mean = np.mean(container.d["signals/data"], axis=1).reshape(container.channel_count, 1)
+            if self.mean == 0:
+                container.d["signals/data"] -= mean
+            else:
+                container.d["signals/data"] -= mean - self.mean
+        if self.variance is not None:
+            variance = np.var(container.d["signals/data"], axis=1).reshape(container.channel_count, 1)
+            if self.variance == 1.0:
+                container.d["signals/data"] /= variance
+            else:
+                container.d["signals/data"] /= variance / self.variance
+        return container
+
+    def log(self):
+        return f"MVNorm@{self.mean},{self.variance}"
+
+
+class RangeNormalization(SigModifierOperator):
+    """
+        Normalize signal to range <a,b>.
+    """
+    def __init__(self, min=0, max=1.0):
+        assert min < max
+        self.min = min
+        self.max = max
+
+    def apply(self, container: SigContainer) -> Any:
+        dmax = np.max(container.signals, axis=1).reshape(container.channel_count, 1)
+        dmin = np.min(container.signals, axis=1).reshape(container.channel_count, 1)
+        drange = (dmax - dmin).reshape(container.channel_count, 1)
+        range = self.max - self.min
+        container.d["signals/data"] = self.min + range * (container.signals - dmin) / drange
+        container.d["signals/units"] = ["unit"] * container.channel_count
+        return container
+
+    def log(self):
+        return f"RangeNorm@{self.min},{self.max}"
+
+
 class Convolution(SigModifierOperator):
     """
     Convolution of signal data (all signals)
@@ -547,61 +598,71 @@ class Fft(MetaProducerOperator):
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
         container.d[self.target + "/data"] = np.abs(fft.fft(container.d["signals/data"], self.n, axis=1))
-        container.d[self.target + "/channels"] = container.d["signals/channels"]
-        container.d[self.target + "/fs"] = container.d["signals/fs"]
+        container.d[self.target + "/channels"] = [name + " (spectre)" for name in container.d["signals/channels"]]
         return container
 
     def log(self):
-        return "FFT"
+        return "#FFT"
+
+
+class FFtAsSignal(SigModifierOperator):
+    def __init__(self, fftSection: str = "fft"):
+        self.target = "meta/" + fftSection
+
+    def apply(self, container: SigContainer) -> Any:
+        data = container.d[self.target + "/data"]
+        channels = container.d[self.target + "/channels"]
+        container = self.prepare_container(container)
+        container.d["signals/data"] = data
+        container.d["signals/channels"] = channels
+        return container
 
 
 class Hdf5(Identity):
     """
     Serializer of containers to HDF5 file
     """
-    def __init__(self, file, *, dir=None):
+    def __init__(self, file:str = "", *, dir: str = ""):
         """
         Args:
-            filename: name of hdf5 file
+            file: name of hdf5 file
         """
-        if dir is not None:
-            self.filename = str(Path(dir) / Path(file))
-        else:
-            self.filename = str(Path(file))
+        self.filepath = DPath.from_path(file).prepend_path(DPath.from_path(dir, dir=True))
 
     @staticmethod
     def h5mapper(value):
         if isinstance(value, np.ndarray):
             if len(value) > 0 and isinstance(value[0], str):
-                return "str_ndarray", np.array([s.encode(encoding="ascii",errors="backslashreplace") for s in value], dtype="S")
+                return "str_ndarray", np.array([s.encode(encoding="ascii", errors="backslashreplace") for s in value],
+                                               dtype="S")
             return "ndarray", value
         if isinstance(value, list):
             if len(value) > 0 and isinstance(value[0], str):
-                return "str_list", np.array([s.encode(encoding="ascii",errors="backslashreplace") for s in value], dtype="S")
+                return "str_list", np.array([s.encode(encoding="utf-8", errors="backslashreplace") for s in value],
+                                            dtype="S")
             return "list", np.array(value)
         if isinstance(value, float):
             return "float", np.full((1,), value, dtype=np.float)
         if isinstance(value, int):
             return "int", np.full((1,), value, dtype=np.int)
         if isinstance(value, str):
-            return "str", np.full((1,), value.encode(encoding="ascii",errors="backslashreplace"), dtype="S")
+            return "str", np.array([value.encode(encoding="utf-8", errors="backslashreplace")], dtype="S")
         else:
             raise TypeError(f"unsupported type {value.__class__} of value `{value}`")
 
     def apply(self, container: SigContainer) -> SigContainer:
         import h5py
         container = self.prepare_container(container)
-        file = self.filename.format(container)
-        with h5py.File(file, "w") as f:
+        path = self.filepath.base_path(container.basepath.extend_stem(container.id).resuffix(".hdf5"))
+        with h5py.File(str(path), "w") as f:
             for path, value in container.d:
-                type, hvalue = Hdf5.h5mapper(value)
+                dtype, hvalue = Hdf5.h5mapper(value)
                 f[path] = hvalue
-                f[path].attrs["type"] = type
+                f[path].attrs["type"] = dtype
         return container
 
-    @staticmethod
-    def load(filename):
-        SigContainer.from_hdf5(filename)
+    def sigcontainer(self):
+        SigContainer.from_hdf5(str(self.basepath))
 
 
 class PResample(SigModifierOperator):
@@ -675,22 +736,20 @@ class Reaper(Identity):
         self.store[skey] = container[self.dkey] if self.dkey is not None else container
         return container
 
-class CSVSaver(Identity):
+
+class Csv(Identity):
     """
     Serializer of containers to CSV file
     """
-    def __init__(self, file, *, dir=None, dialect="excel",
+    def __init__(self, file: str = "", *, dir: str = "", dialect="excel",
                  time_unit: TimeUnit = TimeUnit.SECOND, gzipped=False):
         """
         Args:
-            filename: name of CSV file
+            file: name of CSV file
         """
-        if dir is not None:
-            self.filename = str(Path(dir) / Path(file))
-        else:
-            self.filename = str(Path(file))
+        self.filepath = DPath.from_path(file).prepend_path(DPath.from_path(dir, dir=True))
         if gzipped:
-           self.filename += ".gzip"
+            self.filepath.add_suffix(".gz")
         self.dialect = dialect
         self.time_unit = time_unit
         self.gzipped =  gzipped
@@ -698,13 +757,13 @@ class CSVSaver(Identity):
     def apply(self, container: SigContainer) -> SigContainer:
         import csv
         container = self.prepare_container(container)
-        file = self.filename.format(container)
+        path = self.filepath.base_path(container.basepath.extend_stem(container.id).resuffix(".csv"))
         x = container.x_index(self.time_unit, container.d["signals/fs"])
         opener = open if not self.gzipped else gzip.open
-        with opener(file, "wt", newline='') as csvfile:
+        with opener(str(path), "wt", newline='') as csvfile:
             writer = csv.writer(csvfile, dialect=self.dialect)
             writer.writerow(["time"] + container.d["signals/channels"])
             for i in range(container.signals.shape[1]):
                 writer.writerow([f"{val:g}" for val in
-                    np.hstack((x[i], container.signals[:,i]))])
+                    np.hstack((x[i], container.signals[:, i]))])
         return container

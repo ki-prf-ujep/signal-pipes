@@ -2,7 +2,7 @@ import numpy as np
 from sigpipes.sigcontainer import SigContainer
 from sigpipes.sigoperator import SigOperator
 from warnings import warn
-from typing import Sequence
+from typing import Sequence, List
 from scipy.signal import correlate, convolve
 
 
@@ -92,6 +92,18 @@ class AssymetricJoiner(Joiner):
         if any(c.d["signals/fs"] != output.d["signals/fs"] for c in inputs):
             warn("Join operation on signals with incompatible frequencies")
 
+    def crossChannelNames(self, c1: SigContainer, c2: SigContainer) -> List[str]:
+        return [
+             f"{name1} x {name2}" if name1 !=name2 else f"{name1} (cross)"
+             for name1, name2 in zip(c1.d["/signals/channels"], c2.d["/signals/channels"])
+        ]
+
+    def crossUnit(self, c1: SigContainer, c2: SigContainer) -> List[str]:
+        return [
+             f"{unit1} x {unit2}" if unit1 !=unit2 else f"{unit1}$^2$"
+             for unit1, unit2 in zip(c1.d["/signals/units"], c2.d["/signals/units"])
+        ]
+
 
 class CrossCorrelate(AssymetricJoiner):
     def __init__(self, *branches, mode:str = 'full', method: str = 'auto'):
@@ -100,7 +112,7 @@ class CrossCorrelate(AssymetricJoiner):
         self.method = method
 
     def join(self, output: SigContainer, inputs: Sequence[SigContainer]) -> SigContainer:
-        assert len(inputs)<=1, "Cross corelation with more than two signal is not supported"
+        assert len(inputs) <= 1, "Cross corelation with more than two signal is not supported"
         in1 = output
         in2 = inputs[0] if inputs else in1
         result = np.vstack([
@@ -108,6 +120,8 @@ class CrossCorrelate(AssymetricJoiner):
             for i in range(in1.signals.shape[0])
         ])
         output.d["signals/data"] = result
+        output.d["signals/channels"] = self.crossChannelNames(in1, in2)
+        output.d["signals/units"] = self.crossUnit(in1, in2)
         output.d["signals/lag"] = output.sample_count // 2
         return output
 

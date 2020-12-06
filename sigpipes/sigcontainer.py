@@ -9,6 +9,90 @@ import h5py
 import csv
 
 
+class DPath:
+    def __init__(self, root, dir, stem, suffix):
+        self.root = root
+        self.dir = dir
+        self.stem = stem
+        self.suffix = suffix
+
+    @staticmethod
+    def from_path(path, dir=False):
+        p = Path(path)
+        parts = Path(path).parts
+        if p.is_absolute():
+            root = parts[0]
+            sind = 1
+        else:
+            root = ""
+            sind = 0
+        if dir:
+            if sind < len(parts):
+                dir = str(Path(parts[sind]).joinpath(*parts[sind+1:]))
+            else:
+                dir = ""
+            stem = ""
+            suffix = ""
+        else:
+            if sind < len(parts)-1:
+                dir = str(Path(Path(parts[sind]).joinpath(*parts[sind+1:-1])))
+            else:
+                dir = ""
+            if parts:
+                suffix = "".join(Path(parts[-1]).suffix)
+                stem = str(Path(parts[-1]))[:-len(suffix)]
+            else:
+                suffix = ""
+                stem = ""
+        return DPath(root, dir, stem, suffix)
+
+    def extend_stem(self, extension, *, sep="_"):
+        if extension == "":
+            return self
+        assert self.stem != ""
+        return DPath(self.root, self.dir, self.stem + sep + extension, self.suffix)
+
+    def resuffix(self, newsuffix):
+        assert  self.stem != ""
+        return DPath(self.root, self.dir, self.stem, newsuffix)
+
+    def restem(self, newstem):
+        return DPath(self.root, self.dir, newstem, self.suffix)
+
+    def __repr__(self):
+        return f"root: {self.root}, dir: {self.dir},  stem: {self.stem}, suffix: {self.suffix}"
+
+    def __str__(self):
+        return str(Path(self.root).joinpath(self.dir, self.stem+self.suffix))
+
+    @property
+    def empty(self):
+        return self.root == "" and self.dir == "" and self.stem == "" and self.suffix == ""
+
+    def prepend_path(self, prep):
+        if prep.empty:
+            return self
+        if self.root:
+            raise ValueError(f"Absolute path is not prependable {repr(prep)} < {self}")
+        assert prep.stem == "" and prep.suffix == ""
+        return DPath(prep.root, str(Path(prep.dir)/Path(self.dir)), self.stem, self.suffix)
+
+    def base_path(self, base):
+        if self.dir == "" and self.root == "":
+            root = base.root
+            dir = base.dir
+        else:
+            root = self.root
+            dir = self.dir
+        if self.stem == "":
+            stem = base.stem
+            suffix = base.suffix
+        else:
+            stem = self.stem
+            suffix = self.suffix
+        return DPath(root, dir, stem, suffix)
+
+
 def folder_copy(newdict: Dict[str, Any], olddict: Dict[str, Any],
                 segpath: str, shared_folders: Sequence[str],
                 empty_folders: Sequence[str]) -> None:
@@ -179,11 +263,12 @@ class SigContainer:
 
     @staticmethod
     def from_signal_array(signals: np.ndarray, channels: Sequence[str],
-                  units: Sequence[str], fs: float = 1.0) -> "SigContainer":
+                  units: Sequence[str], fs: float = 1.0, basepath: str = "") -> "SigContainer":
         """
         Creation of container from signal data (in numpy array) and basic metadata.
 
         Args:
+            basepath: base path for filenames
             signals: signals as 2D array, channels in rows
             channels: identifiers of channels
             units:  units of channels data
@@ -196,6 +281,7 @@ class SigContainer:
         d["signals/fs"] = fs
 
         d["log"] = []
+        d["basepath"] = str(DPath.from_path(basepath))
         d.make_folder("meta")
         return SigContainer(d)
 
@@ -261,6 +347,10 @@ class SigContainer:
         Number of channels,
         """
         return self.d["signals/data"].shape[0]
+
+    @property
+    def basepath(self):
+        return DPath.from_path(self.d["basepath"])
 
     @property
     def id(self):
@@ -329,11 +419,22 @@ class SigContainer:
         return self.d[f"{source}/data"][i, :], self.d[f"{source}/channels"][i]
 
     @staticmethod
-    def from_hdf5(filename: str) -> "SigContainer":
+    def from_hdf5(filename: str, *, path: str = None, use_saved_path: bool = False) -> "SigContainer":
         data = HierarchicalDict()
         with h5py.File(filename, "r") as f:
             f.visititems(lambda name, item : SigContainer._visitor(data, name, item))
+        if not use_saved_path:
+            data["basepath"] = str(DPath.from_path(filename).prepend_path(DPath.from_path(path, dir=True)))
         return SigContainer(data)
+
+    @staticmethod
+    def hdf5_cache(source, operator: "SigOperator", path: str = "") -> "SigContainer":
+        path = DPath.from_path(path).base_path(source.filepath.extend_stem("_cache").resuffix(".hdf5"))
+        if Path(str(path)).exists():
+            return SigContainer.from_hdf5(str(path), use_saved_path=True)
+        else:
+            from  sigpipes.sigoperator import Hdf5
+            return source.sigcontainer() | operator| Hdf5(str(path))
 
     @staticmethod
     def _visitor(data: HierarchicalDict, name: str, item: Union[h5py.Group, h5py.Dataset]) -> None:
@@ -346,8 +447,12 @@ class SigContainer:
             elif type == "float":
                 data[name] = float(item[0])
             elif type == "str":
-                data[name] = str(item[0])
-            elif type in ["ndarray", "list", "str_ndarray", "str_list"]:
+                data[name] = item[0].decode(encoding="utf-8")
+            elif type == "list":
+                data[name] = list(item.value)
+            elif type == "str_list":
+                data[name] = list(s.decode(encoding='UTF-8') for s in item.value)
+            elif type in ["ndarray", "str_ndarray"]:
                 data[name] = item.value
 
     @staticmethod
@@ -430,3 +535,17 @@ class SigContainer:
             tdict[annotator]["types"] = adict[annotator]["types"][mn:mx]
             tdict[annotator]["notes"] = adict[annotator]["notes"][mn:mx]
         return tdict
+
+
+if __name__ == "__main__":
+    p = DPath.from_path("a/x.y.z/x.y.z", dir=False)
+    print(repr(p))
+    print(str(p))
+    p = p.extend_stem("00").resuffix(".png").prepend_path(DPath.from_path("/prep/p2", dir=True))
+    print(repr(p))
+    print(str(p))
+    q = DPath.from_path("")
+    q = q.prepend_path(DPath.from_path("", dir=True))
+    q = q.base_path(DPath.from_path("x.y"))
+    print(repr(q))
+    print(str(q))
