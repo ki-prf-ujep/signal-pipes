@@ -128,30 +128,32 @@ class BasePlot(MaybeConsumerOperator):
         plt.close(fig)
         return container
 
-    def _fix_graph_signals(self, container: SigContainer) -> None:
+    def _fix_graph_signals(self, container: SigContainer, gsignals):
         fcol = []
-        for item in self.graph_signals:
+        for item in gsignals:
             if isinstance(item, int):
                 fcol.append((item,))
             elif len(item) == 0:
                 fcol.append(range(container.channel_count))
             else:
                 fcol.append(item)
-        self.graph_signals = fcol
+        return fcol
 
-    def _plot_signals(self, axes: GraphOrganizer, container: SigContainer) -> None:
+    def _plot_signals(self, axes: GraphOrganizer, container: SigContainer, gsignals) -> None:
         raise NotImplementedError("Abstract method")
 
     def plot(self, container: SigContainer) -> Figure:
         if self.graph_signals is None:
-            self.graph_signals = range(container.channel_count)
-        size = len(self.graph_signals)
+            gsignals = range(container.channel_count)
+        else:
+            gsignals = self.graph_signals
+        size = len(gsignals)
 
         ax = GraphOrganizer(size, self.graph_option.columns, self.graph_option.sharey)
         ax.fig.set_size_inches(ax.columns * self.graph_option.graph_width,
                                ax.rows * self.graph_option.graph_height)
-        self._fix_graph_signals(container)
-        self._plot_signals(ax, container)
+        gsignals = self._fix_graph_signals(container, gsignals)
+        self._plot_signals(ax, container, gsignals)
         return ax.fig
 
 
@@ -173,9 +175,9 @@ class FftPlot(BasePlot):
         self.source = "meta/" + source
         self.frange = frange
 
-    def _plot_signals(self, axes: GraphOrganizer, container: SigContainer) -> None:
+    def _plot_signals(self, axes: GraphOrganizer, container: SigContainer, gsignals) -> None:
         freq = container.d["/signals/fs"]
-        for i, group in enumerate(self.graph_signals):
+        for i, group in enumerate(gsignals):
             signals = []
             for index in group:
                 y, signal_name = container.get_fft_tuple(index, self.source)
@@ -238,10 +240,10 @@ class Plot(BasePlot):
         self.graph_annotations = annot_specs
         self.annotation_option = annot_opts
 
-    def _plot_signals(self, axes: GraphOrganizer, container: SigContainer) -> None:
+    def _plot_signals(self, axes: GraphOrganizer, container: SigContainer, gsignals) -> None:
         if self.graph_annotations is None:
-            self.graph_annotations = [()] * len(self.graph_signals)
-        for i, group in enumerate(self.graph_signals):
+            self.graph_annotations = [()] * len(gsignals)
+        for i, group in enumerate(gsignals):
             signals = []
             units = []
             for index in group:

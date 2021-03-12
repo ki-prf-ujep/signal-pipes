@@ -4,6 +4,7 @@ from sigpipes.sigoperator import SigOperator
 from warnings import warn
 from typing import Sequence, List
 from scipy.signal import correlate, convolve
+from deprecated import deprecated
 
 
 class Joiner(SigOperator):
@@ -35,12 +36,32 @@ class Joiner(SigOperator):
             warn("Join operation on signals with incompatible frequencies")
 
 
+class Merge(Joiner):
+    def __init__(self, ufunc: np.ufunc, *branches) -> None:
+        super().__init__(*branches)
+        self.ufunc = ufunc
+
+    def join(self, output: SigContainer, inputs: Sequence[SigContainer]) -> SigContainer:
+        result = np.copy(output.signals)
+        for inc in inputs:
+            self.ufunc(result, inc.signals, out=result)
+        output.d["signals/data"] = result
+        print(output.d["signals/channels"])
+        output.d["signals/channels"] = [
+            f"{self.ufunc.__name__}({', '.join(input.d['signals/channels'][i] for input in [output] + inputs)})"
+            for i in range(output.channel_count)]
+        return output
+
+    def log(self):
+        return f"M@{self.ufunc.__name__}"
+
+@deprecated(reason='more generalized and efficient version in Merge joiner')
 class Sum(Joiner):
     def __init__(self, *branches) -> None:
         super().__init__(*branches)
 
     def join(self, outcontainer: SigContainer, incontainers: Sequence[SigContainer]) -> SigContainer:
-        result = np.zeros_like(incontainers[0].signals)
+        result = np.copy(outcontainer.signals)
         for inc in incontainers:
             result += inc.signals
         outcontainer.d["signals/data"] = result

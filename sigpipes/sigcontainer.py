@@ -40,7 +40,7 @@ class DPath:
                 dir = ""
             if parts:
                 suffix = "".join(Path(parts[-1]).suffix)
-                stem = str(Path(parts[-1]))[:-len(suffix)]
+                stem = str(Path(parts[-1]))[:-len(suffix)] if suffix else str(Path(parts[-1]))
             else:
                 suffix = ""
                 stem = ""
@@ -53,7 +53,7 @@ class DPath:
         return DPath(self.root, self.dir, self.stem + sep + extension, self.suffix)
 
     def resuffix(self, newsuffix):
-        assert  self.stem != ""
+        assert self.stem != ""
         return DPath(self.root, self.dir, self.stem, newsuffix)
 
     def restem(self, newstem):
@@ -273,6 +273,7 @@ class SigContainer:
             channels: identifiers of channels
             units:  units of channels data
             fs: (common) sampling frequency
+            basepath: path to file resource
         """
         d = HierarchicalDict()
         d["signals/data"] = signals
@@ -429,7 +430,7 @@ class SigContainer:
 
     @staticmethod
     def hdf5_cache(source, operator: "SigOperator", path: str = "") -> "SigContainer":
-        path = DPath.from_path(path).base_path(source.filepath.extend_stem("_cache").resuffix(".hdf5"))
+        path = DPath.from_path(path).base_path(source._filepath.extend_stem("_cache").resuffix(".hdf5"))
         if Path(str(path)).exists():
             return SigContainer.from_hdf5(str(path), use_saved_path=True)
         else:
@@ -449,11 +450,11 @@ class SigContainer:
             elif type == "str":
                 data[name] = item[0].decode(encoding="utf-8")
             elif type == "list":
-                data[name] = list(item.value)
+                data[name] = list(item[()])
             elif type == "str_list":
-                data[name] = list(s.decode(encoding='UTF-8') for s in item.value)
+                data[name] = list(s.decode(encoding='UTF-8') for s in item[()])
             elif type in ["ndarray", "str_ndarray"]:
-                data[name] = item.value
+                data[name] = item[()]
 
     @staticmethod
     def from_csv(filename: str, * ,  dir: str = None, dialect: str = "excel", header: bool = True,
