@@ -211,7 +211,7 @@ class MetaProducerOperator(SigOperator):
 
 
 class FeatureExtractor(MetaProducerOperator):
-    def __init__(self, features_dict: Mapping[str,Union[bool,float,Sequence[float]]] = None,
+    def __init__(self, features_dict: Mapping[str, Union[bool,float,Sequence[float]]] = None,
                  *, wamp_threshold: Union[float, Sequence[float]] = (),
                  zc_diff_threshold: float = (), zc_mul_threshold = (),
                  sc_threshold: float = ()):
@@ -336,6 +336,15 @@ class SampleSplitter(SplitterOperator):
         limits.sort()
         return [self.container_factory(container, a, b, "SPL")
                 for a, b in zip(limits, limits[1:])]
+
+
+class ChannelSplitter(SplitterOperator):
+    def __init__(self, channels: Sequence[int] = None):
+        self.channels = channels
+
+    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        container = self.prepare_container(container)
+        channels = self.channels
 
 
 class MarkerSplitter(SplitterOperator):

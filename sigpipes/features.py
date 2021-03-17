@@ -61,7 +61,7 @@ def features(data: np.ndarray, features: Set[str],
         if "WAMP" in features:
             thresh = seq_wrap(thresholds["WAMP"])
             for t in thresh:
-                r["WAMP({t})"] = np.sum(np.where(df >= t, 1, 0), axis=1)
+                r[f"WAMP({t})"] = np.sum(np.where(df >= t, 1, 0), axis=1)
     if "LOG" in features:
         r["LOG"] = np.exp(np.sum(np.log(np.abs(data)), axis=1) / n)
     if "SC" in features:

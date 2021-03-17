@@ -24,7 +24,6 @@ for file in sorted(iglob(sources)):
         | Plot()
         | Fft()
         | FftPlot())
-    continue
 
     (signal | AltOptional(Filter(Butter(5, 20, btype="highpass")))
             | Fft()
