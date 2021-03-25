@@ -26,5 +26,5 @@ setup(
     ],
     packages=find_packages(exclude=("tests",)),
     include_package_data=True,
-    install_requires=["numpy", "scipy", 'h5py', 'matplotlib']
+    install_requires=["numpy", "scipy", "h5py", "matplotlib", "PyEMD", "pandas", "deprecated"]
 )
