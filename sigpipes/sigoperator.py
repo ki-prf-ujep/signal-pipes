@@ -1,5 +1,7 @@
+from abc import ABC, abstractmethod
+
 from sigpipes import features
-from sigpipes.sigcontainer import SigContainer, DPath
+from sigpipes.sigcontainer import SigContainer, DPath, SigFuture
 from sigpipes.auxtools import seq_wrap
 from sigpipes.auxtools import TimeUnit
 import gzip
@@ -13,6 +15,8 @@ from pathlib import Path
 import numpy as np
 import scipy.signal as sig
 import scipy.fftpack as fft
+
+from deprecated import deprecated
 
 
 class SigOperator:
@@ -55,6 +59,11 @@ class SigOperator:
             return [c | self for c in container]
         elif isinstance(container, SigOperator):
             return CompoundSigOperator(container, self)
+        elif isinstance(container, SigFuture):
+            if isinstance(self, ParallelSigOperator):
+                return self.par_apply(container)
+            else:
+                return SigFuture(container, fn=self.apply)
         else:
             raise TypeError("Unsupported left operand of pipe")
 
@@ -69,6 +78,12 @@ class SigOperator:
         Simple (and if possible short) identification.
         """
         return self.__class__.__name__
+
+
+class ParallelSigOperator(ABC):
+    @abstractmethod
+    def par_apply(self, future: SigFuture) -> SigFuture:
+        pass
 
 
 class Identity(SigOperator):
@@ -108,24 +123,31 @@ class Print(Identity):
     """
     Operator which prints debug text representation into text output
     """
-    def __init__(self, output=sys.stdout, header=True):
+    def __init__(self, output=">", header=True):
         """
         Args:
-            output: file-like object in text mode
+            output: file like object or name of output file (">" is stdout out, ">2" stderr)
             header: the header with log-id is printed
         """
-        if isinstance(output, str):
-            self.output = open(output, "wt")
-        else:
-            self.output = output
+        self.output = output
         self.header = header
 
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
+
+        if self.output == ">":
+            f = sys.stdout
+        elif self.output == ">2":
+            f = sys.stderr
+        elif isinstance(self.output, str):
+            f = open(self.output, "wt")  # open in apply, because the file objects are not pickable
+        else:
+            f = self.output
+
         if self.header:
-            print(container.id, file=self.output)
-            print("-"*40, file=self.output)
-        print(str(container), file=self.output)
+            print(container.id, file=f)
+            print("-"*40, file=f)
+        print(str(container), file=f)
         return container
 
 
@@ -338,15 +360,6 @@ class SampleSplitter(SplitterOperator):
                 for a, b in zip(limits, limits[1:])]
 
 
-class ChannelSplitter(SplitterOperator):
-    def __init__(self, channels: Sequence[int] = None):
-        self.channels = channels
-
-    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
-        container = self.prepare_container(container)
-        channels = self.channels
-
-
 class MarkerSplitter(SplitterOperator):
     """
     Splitting of signals data to several containers in points defined by annotation (marker).
@@ -376,6 +389,28 @@ class MarkerSplitter(SplitterOperator):
                 for a, b in zip(limits, limits[1:])]
 
 
+class ChannelSplitter(SigOperator):
+    def __init__(self, channels: Sequence[int] = None):
+        self.channels = channels
+
+    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        container = self.prepare_container(container)
+        containers = []
+        for i in range(container.channel_count):
+            c = SigContainer(container.d.deepcopy(["annotations"], empty_folders=["signals", "meta"]))
+            c.d["signals/data"] = container.d["signals/data"][i, :].reshape(1,container.sample_count)
+            c.d["signals/channels"] = [container.d["signals/channels"][i]]
+            c.d["signals/units"] = [container.d["signals/units"][i]]
+            c.d["signals/fs"] = container.d["signals/fs"]
+            c.d["log"] = list(container.d["log"])
+            c.d["log"].append(f"C{i}")
+            containers.append(c)
+        return containers
+
+    def log(self):
+        return "#ChannelSplit"
+
+
 class SimpleBranching(SigOperator):
     """
     Abstract class for branching operators i.e  operators bifurcating stream to two or more branches
@@ -391,7 +426,7 @@ class SimpleBranching(SigOperator):
         return nc
 
 
-class Tee(SimpleBranching):
+class Tee(SimpleBranching, ParallelSigOperator):
     """
     Tee branching operator. For each parameters of constructor the container is duplicated
     and processed by pipeline passed by this parameter (i.e. all pipelines have the same source,
@@ -412,14 +447,61 @@ class Tee(SimpleBranching):
             copy | branch
         return container
 
+    def par_apply(self, future: SigFuture) -> SigFuture:
+        for branch in self.branches:
+            (future | branch).done()
+        return future
+
     def log(self):
         return "#TEE"
 
-
+@deprecated(reason='new united Fork operator')
 class VariantsSplitter(SimpleBranching):
     pass
 
 
+class Fork(SimpleBranching, ParallelSigOperator):
+    """
+    Alternative branching operator.  For each parameters of constructor the container is duplicated
+    and processed by pipeline passed by this parameter (i.e. all pipelines have the same source,
+    but they are independent).
+    List of containers are returned including original containers and all processed
+    duplicates.
+    """
+
+    def __init__(self, *alternatives, original=False):
+        """
+        Args:
+            *alternatives:  one or more parameters in the form of signals operators (including whole
+            pipelines in the form of compound operator)
+        """
+        super().__init__(*alternatives)
+        self.original = original
+
+    def apply(self, container: SigContainer) -> Sequence[SigContainer]:
+        container = self.prepare_container(container)
+        if self.original:
+            acontainer = [container]
+        else:
+            acontainer = []
+        for branch in self.branches:
+            copy = SimpleBranching.container_factory(container)
+            acontainer.append(copy | branch)
+        return acontainer
+
+    def par_apply(self, future: SigFuture) -> SigFuture:
+        if self.original:
+            acontainer = [future]
+        else:
+            acontainer = []
+        for branch in self.branches:
+            acontainer.append(future | branch)
+        return  acontainer
+
+    def log(self):
+        return "#FORK"
+
+@deprecated(reason='new united Fork operator')
 class AltOptional(VariantsSplitter):
     """
     Alternative branching operator.  For each parameters of constructor the container is duplicated
@@ -447,7 +529,7 @@ class AltOptional(VariantsSplitter):
     def log(self):
         return "#ALTOPT"
 
-
+@deprecated(reason='new united Fork operator')
 class Alternatives(VariantsSplitter):
     """
     Alternative branching operator.  For each parameters of constructor the container is duplicated
@@ -674,6 +756,24 @@ class Hdf5(Identity):
         SigContainer.from_hdf5(str(self.basepath))
 
 
+class ResampleToNumberOfSamples(SigModifierOperator):
+    def __init__(self, new_samples: int, change_freq: bool = True):
+        self.nlen = new_samples
+        self.chfreq = change_freq
+
+    def apply(self, container: SigContainer) -> SigContainer:
+        container = self.prepare_container(container)
+        oldlength = container.sample_count
+        container.d["signals/data"] = sig.resample(container.d["signals/data"].transpose(), self.nlen).transpose()
+        if self.chfreq:
+            container.d["signals/fs"] = self.nlen * container.d["signals/fs"] / oldlength
+        #FIXME: change annotation position
+        return container
+
+    def log(self):
+        return f"SAMPLE_N@{self.nlen}"
+
+
 class PResample(SigModifierOperator):
     """
     Resampling using polyphase filtering
@@ -776,3 +876,6 @@ class Csv(Identity):
                 writer.writerow([f"{val:g}" for val in
                     np.hstack((x[i], container.signals[:, i]))])
         return container
+
+
+

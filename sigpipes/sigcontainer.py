@@ -1,10 +1,12 @@
 import re
+from copy import deepcopy
 from typing import Sequence, Any, Union, Dict, Optional, Callable
 from re import split
 from pathlib import Path
 
 import numpy as np
 from sigpipes.auxtools import type_info, smart_tostring, TimeUnit
+from sigpipes.sigfuture import SigFuture
 import h5py
 import csv
 
@@ -177,6 +179,9 @@ class HierarchicalDict:
                 return False
             adict = adict[folder]
         return True
+
+    def pdeepcopy(self):
+        return deepcopy(self)
 
     def deepcopy(self, shared_folders: Sequence[str]=[],
                  empty_folders: Sequence[str] = [],
@@ -430,12 +435,15 @@ class SigContainer:
 
     @staticmethod
     def hdf5_cache(source, operator: "SigOperator", path: str = "") -> "SigContainer":
-        path = DPath.from_path(path).base_path(source._filepath.extend_stem("_cache").resuffix(".hdf5"))
+        filepath = DPath.from_path(source.filepath)
+        path = path or DPath.from_path(path).base_path(filepath.extend_stem("_cache").resuffix(".hdf5"))
         if Path(str(path)).exists():
+            print(f"use cache {path}")
             return SigContainer.from_hdf5(str(path), use_saved_path=True)
         else:
-            from  sigpipes.sigoperator import Hdf5
-            return source.sigcontainer() | operator| Hdf5(str(path))
+            from sigpipes.sigoperator import Hdf5
+            print(f"cached to {path}")
+            return source.sigcontainer() | operator | Hdf5(str(path))
 
     @staticmethod
     def _visitor(data: HierarchicalDict, name: str, item: Union[h5py.Group, h5py.Dataset]) -> None:
@@ -457,7 +465,7 @@ class SigContainer:
                 data[name] = item[()]
 
     @staticmethod
-    def from_csv(filename: str, * ,  dir: str = None, dialect: str = "excel", header: bool = True,
+    def from_csv(fpath, *, dialect: str = "excel", header: bool = True,
                  default_unit: str = "unit", fs=None, transpose: bool = False,
                  annotation: Union[str,Sequence[str]] = None) -> "SigContainer":
         """
@@ -470,19 +478,17 @@ class SigContainer:
             default_unit: default unit (if is not defined by header)
             fs: sampling frequency, if smapling frequency is not provided, the frequency is
                 derived from first column which must containts second timestamps
-            annotation: filename of annotation file
+            annotation: filename of annotation file(s)import numpy as np
+
         Returns:
 
         """
-        if dir is not None:
-            filepath = Path(dir) / Path(filename)
-        else:
-            filepath = Path(filename)
+        _filepath = fpath
         signals = []
         times = []
         units = None
         headers = None
-        with open(filepath, "rt", newline='') as csvfile:
+        with open(str(_filepath), "rt", newline='') as csvfile:
             reader = csv.reader(csvfile, dialect=dialect)
             if header:
                 row = next(reader)
@@ -508,7 +514,7 @@ class SigContainer:
             fs = 1 / np.mean(diff)
             assert np.std(diff)*fs < 1e-4, "The time differences are not equal"
             assert all(diff > 0), "Some time steps are negative"
-        c = SigContainer.from_signal_array(data, headers, units, float(fs))
+        c = SigContainer.from_signal_array(data, headers, units, float(fs), basepath=str(_filepath))
         if annotation is not None:
             if isinstance(annotation, str):
                 annotation = [annotation]

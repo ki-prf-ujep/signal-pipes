@@ -7,21 +7,35 @@ from scipy.signal import correlate, convolve
 from deprecated import deprecated
 
 
+def common_prefix_index(*args):
+    index = 0
+    for p in zip(*args):
+        if len(set(p)) > 1:
+            return index
+        index += 1
+    return index
+
+
 class Joiner(SigOperator):
     def __init__(self, *branches):
         self.subop = branches
 
     def fromSources(self) -> SigContainer:
         container = self.prepare_container(self.subop[0])
-        return self.join(container, self.subop[1:])
+        return self.common_apply(container, self.subop[1:])
 
     def apply(self, container: SigContainer) -> SigContainer:
         container = self.prepare_container(container)
         containers = [inp if isinstance(inp, SigContainer) else container | inp for inp in self.subop]
-        # containers = container | Alternatives(*self.subop)
-        assert all(isinstance(c, SigContainer) for c in containers), "Join over non containers"
-        self.assertion(container, containers)
-        return self.join(container, containers)
+        return self.common_apply(container, containers)
+
+    def common_apply(self, output, inputs):
+        assert all(isinstance(c, SigContainer) for c in inputs), "Join over non containers"
+        self.assertion(output, inputs)
+        rescontainter = self.join(output, inputs)
+        nlog = self.join_log(output.d["log"], [c.d["log"] for c in inputs])
+        rescontainter.d["log"] = nlog
+        return rescontainter
 
     def prepare_container(self, container: SigContainer) -> SigContainer:
         return SigContainer(container.d.deepcopy(shared_folders=["annotations"],
@@ -35,6 +49,15 @@ class Joiner(SigOperator):
         if any(c.d["signals/fs"] != output.d["signals/fs"] for c in inputs):
             warn("Join operation on signals with incompatible frequencies")
 
+    def join_log(self, outlog, inlogs):
+        logs = [outlog]
+        logs.extend(inlogs)
+        cp = common_prefix_index(*logs)
+        newlog = outlog[:cp]
+        params = ["~".join(log[cp:]) for log in logs]
+        newlog.append(f"{self.log()}({','.join(params)})")
+        return newlog
+
 
 class Merge(Joiner):
     def __init__(self, ufunc: np.ufunc, *branches) -> None:
@@ -46,14 +69,13 @@ class Merge(Joiner):
         for inc in inputs:
             self.ufunc(result, inc.signals, out=result)
         output.d["signals/data"] = result
-        print(output.d["signals/channels"])
         output.d["signals/channels"] = [
-            f"{self.ufunc.__name__}({', '.join(input.d['signals/channels'][i] for input in [output] + inputs)})"
+            f"{self.ufunc.__name__}({', '.join(input.d['signals/channels'][i] for input in [output] + list(inputs))})"
             for i in range(output.channel_count)]
         return output
 
     def log(self):
-        return f"M@{self.ufunc.__name__}"
+        return f"MERGE@{self.ufunc.__name__}"
 
 @deprecated(reason='more generalized and efficient version in Merge joiner')
 class Sum(Joiner):

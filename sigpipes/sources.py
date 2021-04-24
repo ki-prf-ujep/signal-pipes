@@ -3,7 +3,7 @@ import abc
 from collections import defaultdict
 from enum import Enum
 from re import match, finditer, Pattern
-from typing import Iterable
+from typing import Iterable, Union, Sequence
 
 import numpy as np
 import scipy.signal as signal
@@ -23,10 +23,42 @@ class SignalSource(metaclass=abc.ABCMeta):
         raise NotImplementedError("abstract method")
 
 
+class CsvSource(SignalSource):
+    def __init__(self, filename: str, fs, *, dir: str = "", dialect: str = "excel", header: bool = True,
+                 default_unit: str = "unit", transpose: bool = False,
+                 annotation: Union[str, Sequence[str]] = None):
+        self._filepath = DPath.from_path(filename).prepend_path(DPath.from_path(dir, dir=True))
+        self.dialect = dialect
+        self.header = header
+        self.default_unit = default_unit
+        self.fs = fs
+        self.transpose = transpose
+        self.annotation = annotation
+
+    def sigcontainer(self) -> SigContainer:
+        return SigContainer.from_csv(self._filepath, dialect=self.dialect, header=self.header,
+                                     default_unit=self.default_unit, fs = self.fs, transpose=self.transpose,
+                                     annotation=self.annotation)
+
+    def filepath(self) -> str:
+        return str(self._filepath)
+
+
 class SynergyLP(SignalSource):
     def __init__(self, filename: str, *, dir: str = "", shortname = None, channels = None):
         self._filepath = DPath.from_path(filename).prepend_path(DPath.from_path(dir, dir=True))
+        self.channels = channels
 
+        if shortname is None:
+            self.shortpath = self._filepath
+        elif isinstance(shortname, Pattern):
+            stem = self._filepath.stem
+            m = shortname.search(stem)
+            if m:
+                stem = m.group(0)
+            self.shortpath = self._filepath.restem(stem)
+
+    def read(self):
         with open(str(self._filepath), "rt", encoding="utf-16le") as f:
             longline = None
             cline = False
@@ -48,7 +80,7 @@ class SynergyLP(SignalSource):
 
                 m = match(r"Sampling Frequency\(kHz\)=(\d+,\d+)", longline)
                 if m:
-                    self.fs = 1000 * float(m.group(1).replace(",","."))
+                    fs = 1000 * float(m.group(1).replace(",","."))
                     continue
 
                 m = match(r"Channel\s+Number=(\d+)", longline)
@@ -65,31 +97,22 @@ class SynergyLP(SignalSource):
                         if subm.group(1) == "-":
                             value = -value
                         data[channel].append(value)
-        self.data = data
-        self.channels = channels
-
-        if shortname is None:
-            self.shortpath = self._filepath
-        elif isinstance(shortname, Pattern):
-            stem = self._filepath.stem
-            m = shortname.search(stem)
-            if m:
-                stem = m.group(0)
-            self.shortpath = self._filepath.restem(stem)
+        return fs, data
 
     def sigcontainer(self) -> SigContainer:
-        if list(self.data.keys()) == [0]:
-            data = np.array(self.data[0]).reshape((1, len(self.data[0])))
-            container = SigContainer.from_signal_array(data, channels=[self.shortpath.stem], units=["mV"], fs=self.fs)
+        fs, data = self.read()
+        if list(data.keys()) == [0]:
+            data = np.array(data[0]).reshape((1, len(data[0])))
+            channel = self.channels if self.channels[0] else self.shortpath.stem
+            container = SigContainer.from_signal_array(data, channels=[channel], units=["mV"], fs=self.fs)
         else: # multichannel
-            data = np.vstack(tuple(np.array(self.data[chan]).reshape(1, len(self.data[chan]))
-                             for chan in sorted(self.data.keys())))
+            data = np.vstack(tuple(np.array(data[chan]).reshape(1, len(data[chan])) for chan in sorted(data.keys())))
             if self.channels is None:
                 labels = [f"{self.shortpath.stem}: channel {chan}" for chan in sorted(self.data.keys())]
             else:
                 labels = [f"{self.shortpath.stem}: {self.channels[chan]}" for chan in sorted(self.data.keys())]
 
-            container = SigContainer.from_signal_array(data, channels=labels, units=["mV"] * len(labels), fs=self.fs,
+            container = SigContainer.from_signal_array(data, channels=labels, units=["mV"] * len(labels), fs = fs,
                                                        basepath=str(self.shortpath))
         return container
 

@@ -67,3 +67,6 @@ class Hilbert(SigModifierOperator):
         h = sig.hilbert(container.signals, axis=1)
         container.d["signals/data"] = np.sqrt(np.real(h)**2 + np.imag(h)**2)
         return container
+
+    def log(self):
+        return f"HILB"

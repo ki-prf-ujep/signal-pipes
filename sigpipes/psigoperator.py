@@ -1,34 +1,38 @@
-from sigpipes.sigcontainer import SigContainer
-from sigpipes.sigoperator import SimpleBranching
-from multiprocessing import Pool
+from concurrent.futures import Executor
+from os import getpid
+from typing import Any
+from time import perf_counter
+
+from sigpipes.sigcontainer import SigContainer, SigFuture
+from sigpipes.sigoperator import Identity, SigOperator, ParallelSigOperator
 
 
-def fmap(branch, container):
-    container | branch
+class AsFuture(Identity):
+    def __init__(self, executor: Executor):
+        self.executor = executor
+
+    def apply(self, container: SigContainer) -> Any:
+        future = SigFuture(container, pool=self.executor)
+        return future
 
 
-_pool = Pool()
+class ProcessTracker(Identity):
+    def __init__(self):
+        pass
 
-
-class ParTee(SimpleBranching):
-    """
-    Tee parallel branching operator. For each parameters of constructor the container is duplicated
-    and processed in parallel by pipeline passed by this parameter
-    (i.e. all pipelines have the same source,
-    but they are independent). Only original container is returned (i.e. only one streamm continues)
-    """
-    def __init__(self, *branches):
-        """
-        Args:
-            *branches:  one or more parameters in the form of signals operators (including whole
-            pipelines in the form of compound operator)
-        """
-        super().__init__(*branches)
-
-    def apply(self, container: SigContainer) -> SigContainer:
+    def apply(self, container: SigContainer) -> Any:
         container = self.prepare_container(container)
-        _pool.starmap(fmap, ((branch, container) for branch in self.branches))
+        duration = perf_counter() % 1000.0
+        print(f"{getpid()}\t[{duration:.4f}]:\t{container.id}")
         return container
 
-    def log(self):
-        return "#PTEE"
+
+class Barrier(Identity, ParallelSigOperator):
+    def __init__(self):
+        pass
+
+    def apply(self, container: SigContainer) -> Any:
+        raise Exception("Barrier is applicable only on futures")
+
+    def par_apply(self, future: SigFuture):
+        return future.result()
