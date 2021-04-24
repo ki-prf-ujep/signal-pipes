@@ -10,7 +10,7 @@ README = (HERE / "README.md").read_text()
 # This call to setup() does all the work
 setup(
     name="signal-pipes",
-    version="0.1.15",
+    version="0.1.16",
     description="Stream operation for processing of (physiological) signals",
     long_description=README,
     long_description_content_type="text/markdown",
