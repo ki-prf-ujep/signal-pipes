@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 from sigpipes.auxtools import type_info, smart_tostring, TimeUnit
-from sigpipes.sigfuture import SigFuture
 import h5py
 import csv
 
@@ -355,6 +354,10 @@ class SigContainer:
         return self.d["signals/data"].shape[0]
 
     @property
+    def sample_frequency(self):
+        return self.d["signals/fs"]
+
+    @property
     def basepath(self):
         return DPath.from_path(self.d["basepath"])
 
@@ -364,8 +367,7 @@ class SigContainer:
             Unique identifier of container state (sequence of modifications performed
             on container). This identifier can be used as unique filename for outputs.
         """
-        return "~".join(op for op in self.d["log"]
-                        if not op.startswith("#")).replace(".", ",").replace(" ", "")
+        return "~".join(op for op in self.d["log"] if not op.startswith("#")).replace(".", ",").replace(" ", "")
 
     @property
     def lag(self):

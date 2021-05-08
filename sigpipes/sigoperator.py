@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 
 from sigpipes import features
-from sigpipes.sigcontainer import SigContainer, DPath, SigFuture
+from sigpipes.sigcontainer import SigContainer, DPath
+from sigpipes.sigfuture import SigFuture, SignalSpace
 from sigpipes.auxtools import seq_wrap
 from sigpipes.auxtools import TimeUnit
 import gzip
@@ -63,7 +64,9 @@ class SigOperator:
             if isinstance(self, ParallelSigOperator):
                 return self.par_apply(container)
             else:
-                return SigFuture(container, fn=self.apply)
+                return SigFuture(container, fn=self.apply,
+                                 sigspace=self.sigspace_transformation(container.sigspace),
+                                 node_description=self.log())
         else:
             raise TypeError("Unsupported left operand of pipe")
 
@@ -78,6 +81,9 @@ class SigOperator:
         Simple (and if possible short) identification.
         """
         return self.__class__.__name__
+
+    def sigspace_transformation(self, sigspace:SignalSpace) -> SignalSpace:
+        return sigspace
 
 
 class ParallelSigOperator(ABC):
@@ -329,8 +335,7 @@ class SplitterOperator(SigOperator):
     Abstract class for splitters (i.e. operators which split container into several containers
     (segments) that can be processes independently as sequence of container.
     """
-    def container_factory(self, container: SigContainer, a: int, b: int,
-                          splitter_id: str) -> SigContainer:
+    def container_factory(self, container: SigContainer, a: int, b: int, splitter_id: str) -> SigContainer:
         c = SigContainer(container.d.deepcopy(empty_folders=["meta", "annotations"]))
         c.d["signals/data"] = c.d["signals/data"][:, a:b]
         newlog = list(c.d["log"])
@@ -396,6 +401,7 @@ class ChannelSplitter(SigOperator):
     def apply(self, container: SigContainer) -> Sequence[SigContainer]:
         container = self.prepare_container(container)
         containers = []
+        #TODO: zohlednit kanály
         for i in range(container.channel_count):
             c = SigContainer(container.d.deepcopy(["annotations"], empty_folders=["signals", "meta"]))
             c.d["signals/data"] = container.d["signals/data"][i, :].reshape(1,container.sample_count)
